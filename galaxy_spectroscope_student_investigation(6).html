@@ -1,0 +1,1817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>M31 Spectroscope Explorer - Student Investigation</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #162033;
+      --muted: #5f6c80;
+      --line: #dbe3ef;
+      --accent: #3757ff;
+      --accent-dark: #1e37b8;
+      --accent-soft: rgba(55, 87, 255, 0.12);
+      --space: #030711;
+      --gold: #ffc857;
+      --cyan: #00ffd5;
+      --shadow: 0 18px 46px rgba(22, 32, 51, 0.12);
+      --radius: 18px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(55, 87, 255, 0.10), transparent 32rem),
+        radial-gradient(circle at 90% 8%, rgba(72, 90, 150, 0.12), transparent 28rem),
+        var(--bg);
+      line-height: 1.45;
+    }
+
+    .app {
+      width: min(1180px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding: 18px 0 44px;
+    }
+
+    header.hero {
+      background: linear-gradient(135deg, #11182f, #203275 60%, #4554a8);
+      color: white;
+      border-radius: 24px;
+      padding: 26px;
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    header.hero::before {
+      content: "";
+      position: absolute;
+      inset: -90px -90px auto auto;
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,255,255,0.20), transparent 64%);
+      pointer-events: none;
+    }
+
+    .kicker {
+      margin: 0 0 6px;
+      font-weight: 850;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-size: 0.76rem;
+      opacity: 0.9;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      margin-bottom: 8px;
+      font-size: clamp(1.65rem, 4vw, 3.2rem);
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      max-width: 850px;
+      margin-bottom: 0;
+      font-size: clamp(1rem, 1.8vw, 1.14rem);
+      opacity: 0.94;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid rgba(255,255,255,0.24);
+      color: white;
+      background: rgba(255,255,255,0.10);
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-weight: 750;
+      font-size: 0.9rem;
+      backdrop-filter: blur(4px);
+    }
+
+    button, input, select, textarea { font: inherit; }
+
+    button {
+      border: 0;
+      cursor: pointer;
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-weight: 800;
+      color: var(--ink);
+      background: #eef2ff;
+      transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(22, 32, 51, 0.12); }
+    button:active { transform: translateY(0); box-shadow: none; }
+    button.primary { color: white; background: var(--accent); }
+    button.primary:hover { background: var(--accent-dark); }
+    button.ghost { background: transparent; border: 1px solid var(--line); }
+    button.small { padding: 7px 10px; font-size: 0.84rem; }
+    button.hero-btn { background: rgba(255,255,255,0.16); color: #fff; border: 1px solid rgba(255,255,255,0.3); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(330px, 0.75fr);
+      gap: 18px;
+      margin-top: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-pad { padding: 18px; }
+
+    .section-title {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .section-title h2, .section-title h3 { margin: 0; line-height: 1.1; }
+    .section-title p { margin: 5px 0 0; color: var(--muted); }
+
+    .galaxy-wrap {
+      position: relative;
+      background: var(--space);
+      min-height: 390px;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid #0e1830;
+    }
+
+    #galaxyCanvas {
+      display: block;
+      width: 100%;
+      height: min(58vw, 560px);
+      min-height: 390px;
+      max-height: 620px;
+      touch-action: none;
+    }
+
+    .canvas-hint {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      color: rgba(255,255,255,0.88);
+      background: rgba(4, 8, 18, 0.64);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px;
+      padding: 10px 12px;
+      font-size: 0.92rem;
+      max-width: min(560px, calc(100% - 28px));
+      backdrop-filter: blur(4px);
+    }
+
+    .mission-card {
+      border-top: 1px solid var(--line);
+      padding: 16px 18px;
+      background: linear-gradient(180deg, #ffffff, #f7f9ff);
+    }
+
+    .mission-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .mission-chip {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 14px;
+      padding: 10px;
+      text-align: left;
+      font-weight: 750;
+      color: var(--ink);
+    }
+
+    .mission-chip.active {
+      background: var(--accent-soft);
+      border-color: rgba(55, 87, 255, 0.42);
+      color: var(--accent-dark);
+    }
+
+    .readouts {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(120px, 0.8fr);
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .readout {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      background: #fbfcff;
+      min-height: 88px;
+      overflow: hidden;
+    }
+
+    .readout label, .measurement-card label {
+      display: block;
+      color: var(--muted);
+      font-size: 0.73rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+      line-height: 1.35;
+    }
+
+    .readout .value {
+      display: block;
+      font-size: clamp(1.05rem, 2.3vw, 1.45rem);
+      font-weight: 900;
+      line-height: 1.18;
+      min-height: 1.45em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #radiusValue.value {
+      font-size: clamp(1.35rem, 3vw, 1.85rem);
+    }
+
+    .readout .unit {
+      color: var(--muted);
+      font-weight: 800;
+      margin-left: 0;
+      display: block;
+      margin-top: 2px;
+      min-height: 1.2em;
+      white-space: nowrap;
+    }
+
+    .target-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      margin-bottom: 10px;
+      min-height: 62px;
+      overflow: hidden;
+      align-content: start;
+    }
+
+    .catalog-type {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin: 4px 0 10px;
+      background: #fbfcff;
+      min-height: 38px;
+      overflow: hidden;
+    }
+
+    .catalog-type .label {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .catalog-type .value {
+      color: var(--ink);
+      font-size: 0.88rem;
+      font-weight: 850;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+
+    .catalog-type.observed-light {
+      background: #f7f9ff;
+      margin-top: -4px;
+    }
+
+    .catalog-type.observed-light .value {
+      white-space: normal;
+      line-height: 1.25;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 5px 8px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .spectrum-box {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: #080a0e;
+      margin-top: 10px;
+    }
+
+    #spectrumCanvas {
+      display: block;
+      width: 100%;
+      height: 250px;
+      background: #05070c;
+      touch-action: none;
+      cursor: crosshair;
+    }
+
+    .spectrum-caption {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: #fff;
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .measurement-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: stretch;
+      margin-top: 12px;
+    }
+
+    .measurement-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 11px 12px;
+      background: #fbfcff;
+      min-height: 74px;
+      overflow: hidden;
+    }
+
+    .measurement-value {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      font-size: 1.65rem;
+      font-weight: 900;
+      line-height: 1.1;
+      min-height: 1.4em;
+    }
+
+    .measurement-value span:last-child {
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 850;
+    }
+
+    .obs-form {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field.full { grid-column: 1 / -1; }
+
+    .field label {
+      font-size: 0.86rem;
+      font-weight: 850;
+      color: var(--muted);
+      line-height: 1.3;
+    }
+
+    input, textarea, select {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 10px 11px;
+      color: var(--ink);
+      outline: none;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: rgba(55, 87, 255, 0.58);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+    }
+
+    textarea { min-height: 78px; resize: vertical; }
+
+    .form-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .record-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      margin-top: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      min-width: 620px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 9px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 0.93rem;
+    }
+
+    th {
+      background: #f6f8fc;
+      color: #3b4559;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.055em;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .empty-row td {
+      color: var(--muted);
+      text-align: center;
+      padding: 22px;
+    }
+
+    .teacher-gate {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 14px 0 0;
+    }
+
+    .teacher-login {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .teacher-login.open { display: flex; }
+
+    .teacher-login label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 750;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .teacher-login input {
+      width: 96px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 9px;
+      font: inherit;
+      font-size: 0.88rem;
+      outline: none;
+    }
+
+    .teacher-login input:focus {
+      border-color: rgba(55, 87, 255, 0.65);
+      box-shadow: 0 0 0 3px rgba(55, 87, 255, 0.12);
+    }
+
+    .teacher-login .error {
+      display: none;
+      color: #b42318;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    .teacher-login .error.show { display: inline; }
+
+    #teacherPanel {
+      display: none;
+      margin-top: 18px;
+      border: 2px dashed rgba(55, 87, 255, 0.35);
+    }
+
+    #teacherPanel.open { display: block; }
+
+    .teacher-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 12px 0;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+    }
+
+    .teacher-tab {
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      padding: 8px 11px;
+      font-size: 0.86rem;
+    }
+
+    .teacher-tab.active {
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+      border-color: rgba(55, 87, 255, 0.40);
+    }
+
+    .teacher-pane { display: none; }
+    .teacher-pane.active { display: block; }
+
+    .teacher-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .teacher-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      background: #fbfcff;
+    }
+
+    .teacher-card strong { display: block; margin-bottom: 3px; }
+
+    .teacher-list {
+      margin: 8px 0 0;
+      color: var(--muted);
+      padding-left: 1.1rem;
+    }
+
+    .teacher-list li { margin: 7px 0; }
+
+    .worksheet-copy {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      color: #273248;
+    }
+
+    .worksheet-copy h3 { margin-bottom: 8px; }
+    .worksheet-copy hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+
+    .footer-note {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 16px;
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .mission-grid { grid-template-columns: repeat(2, 1fr); }
+      .teacher-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .app { width: min(100vw - 14px, 1180px); padding-top: 8px; }
+      header.hero { padding: 18px; border-radius: 18px; }
+      .panel-pad { padding: 14px; }
+      .readouts, .obs-form, .measurement-row { grid-template-columns: 1fr; }
+      #galaxyCanvas { min-height: 330px; }
+      .mission-grid { grid-template-columns: 1fr; }
+      #spectrumCanvas { height: 235px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      header.hero, .galaxy-wrap, .spectrum-box, .form-actions, .teacher-gate, #teacherPanel { box-shadow: none; }
+      button { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="hero">
+      <p class="kicker">Student Investigation</p>
+      <h1>M31 Spectroscope Explorer</h1>
+      <p>Aim the telescope at bright hydrogen-emission regions in the Andromeda Galaxy. Each target is shown near a named catalog object, but the spectrum represents H-alpha emission from nearby ionized hydrogen gas. Use the grayscale spectrum to estimate the shifted line, then record your observations on your worksheet.</p>
+      <div class="topbar">
+        <span class="pill">Drag the ruler to estimate the line</span>
+        <button class="hero-btn" id="randomTargetBtn" type="button">Point to a random region</button>
+      </div>
+    </header>
+
+    <main class="grid" aria-label="Interactive spectroscope activity">
+      <section class="panel" aria-labelledby="aim-title">
+        <div class="panel-pad">
+          <div class="section-title">
+            <div>
+              <h2 id="aim-title">1. Aim the telescope</h2>
+              <p>Click or drag across the sky image. The telescope will lock onto the nearest bright hydrogen-emission region.</p>
+            </div>
+            <button class="ghost small" id="resetAimBtn" type="button">Reset aim</button>
+          </div>
+          <div class="galaxy-wrap" id="galaxyWrap">
+            <canvas id="galaxyCanvas" width="1200" height="720" aria-label="Interactive night-sky view of the Andromeda Galaxy with telescope reticle and H-alpha emission regions"></canvas>
+            <div class="canvas-hint">Tip: observe emission regions near the bright center and farther out in the faint disk. Compare your data with another team.</div>
+          </div>
+        </div>
+
+        <div class="mission-card">
+          <h3>Optional team mission</h3>
+          <p style="margin: 6px 0 0; color: var(--muted);">Choose a region for your team, collect several observations, then share data with teams assigned to other regions.</p>
+          <div class="mission-grid" id="missionGrid" role="group" aria-label="Galaxy region filters">
+            <button class="mission-chip active" data-zone="all" type="button">All regions<br><span class="tag">class view</span></button>
+            <button class="mission-chip" data-zone="center" type="button">Center team<br><span class="tag">0-8 kpc</span></button>
+            <button class="mission-chip" data-zone="inner" type="button">Inner disk<br><span class="tag">8-18 kpc</span></button>
+            <button class="mission-chip" data-zone="outer" type="button">Outer disk<br><span class="tag">18-36 kpc</span></button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel" aria-labelledby="observe-title">
+        <div class="panel-pad">
+          <div class="section-title">
+            <div>
+              <h2 id="observe-title">2. Observe the spectrum</h2>
+              <p>Find the bright vertical H-alpha emission line. Drag the ruler to line up with it.</p>
+            </div>
+          </div>
+
+          <div class="readouts">
+            <div class="readout">
+              <label>Pointing near</label>
+              <span class="value" id="targetName"></span>
+              <span class="unit" id="targetHint">Choose an emission region to begin.</span>
+            </div>
+            <div class="readout">
+              <label>Distance from center</label>
+              <span class="value" id="radiusValue"></span>
+              <span class="unit">kpc</span>
+            </div>
+          </div>
+
+          <div class="target-meta" id="targetMeta" aria-live="polite"></div>
+
+          <div class="catalog-type" id="catalogTypeBox" aria-live="polite">
+            <span class="label">Guide object type</span>
+            <span class="value" id="catalogTypeValue">Choose a target to begin.</span>
+          </div>
+
+          <div class="catalog-type observed-light" aria-live="polite">
+            <span class="label">Measured light</span>
+            <span class="value" id="observedLightValue">H-alpha emission from nearby ionized hydrogen gas</span>
+          </div>
+
+          <div class="spectrum-box">
+            <canvas id="spectrumCanvas" width="900" height="300" aria-label="Grayscale H-alpha emission spectrum with wavelength scale from 655.8 to 656.8 nanometers"></canvas>
+            <div class="spectrum-caption">
+              <span>Scale: 655.8 nm to 656.8 nm</span>
+              <span>Drag or click the ruler to estimate &lambda;<sub>obs</sub>.</span>
+            </div>
+          </div>
+
+          <div class="measurement-row">
+            <div class="measurement-card">
+              <label>Ruler estimate, &lambda;<sub>obs</sub></label>
+              <div class="measurement-value"><span id="rulerEstimate"></span><span id="rulerUnit"></span></div>
+            </div>
+            <button class="ghost small" id="clearRulerBtn" type="button">Clear ruler</button>
+          </div>
+
+          <div class="obs-form" aria-label="Record observations table input">
+            <div class="field">
+              <label for="estimateInput">Your estimate of H-alpha line, &lambda;<sub>obs</sub> (nm)</label>
+              <input id="estimateInput" type="number" step="0.01" min="655.8" max="656.8" placeholder="ex: 656.60" />
+            </div>
+            <div class="field">
+              <label for="teamInput">Team / initials</label>
+              <input id="teamInput" type="text" placeholder="ex: Team 3" maxlength="30" />
+            </div>
+            <div class="field full">
+              <label for="notesInput">Observation notes</label>
+              <textarea id="notesInput" placeholder="What did you notice about this emission region or spectrum?"></textarea>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="primary" id="addRowBtn" type="button">Add to observation table</button>
+            <button class="ghost" id="clearFormBtn" type="button">Clear estimate</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <section class="panel" aria-labelledby="record-title" style="margin-top: 18px;">
+      <div class="panel-pad">
+        <div class="section-title">
+          <div>
+            <h2 id="record-title">3. Record observations</h2>
+            <p>This table is a notebook space. Complete the calculations, graphing, and explanation on your worksheet.</p>
+          </div>
+          <div class="form-actions" style="margin: 0;">
+            <button class="ghost small" id="copyRowsBtn" type="button">Copy table</button>
+            <button class="ghost small" id="downloadRowsBtn" type="button">Download CSV</button>
+            <button class="ghost small" id="clearRowsBtn" type="button">Clear table</button>
+          </div>
+        </div>
+        <div class="record-table-wrap">
+          <table aria-label="Student observation table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Pointing near</th>
+                <th>Distance from center (kpc)</th>
+                <th>Estimated &lambda;<sub>obs</sub> (nm)</th>
+                <th>Team / initials</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="obsTableBody">
+              <tr class="empty-row"><td colspan="6">No observations recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <div class="teacher-gate">
+      <button class="ghost small" id="teacherToggleBtn" type="button" aria-controls="teacherPanel teacherLogin" aria-expanded="false">Teacher view</button>
+      <div class="teacher-login" id="teacherLogin" aria-label="Teacher view passcode entry">
+        <label for="teacherPassInput">Passcode</label>
+        <input id="teacherPassInput" type="password" autocomplete="off" inputmode="text" />
+        <button class="primary small" id="teacherUnlockBtn" type="button">Unlock</button>
+        <button class="ghost small" id="teacherCancelBtn" type="button">Cancel</button>
+        <span class="error" id="teacherPassError" role="alert">Try again.</span>
+      </div>
+    </div>
+
+    <section class="panel" id="teacherPanel" aria-labelledby="teacher-title">
+      <div class="panel-pad">
+        <div class="section-title">
+          <div>
+            <h2 id="teacher-title">Teacher / admin view</h2>
+            <p>Hidden from students unless unlocked. Use this for answer checks, facilitation notes, and worksheet text.</p>
+          </div>
+          <button class="ghost small" id="closeTeacherBtn" type="button">Close</button>
+        </div>
+
+        <div class="teacher-tabs" role="tablist" aria-label="Teacher view tabs">
+          <button class="teacher-tab active" data-pane="answerPane" type="button">Answer key</button>
+          <button class="teacher-tab" data-pane="instructionPane" type="button">Instruction ideas</button>
+          <button class="teacher-tab" data-pane="worksheetPane" type="button">Worksheet copy</button>
+        </div>
+
+        <div class="teacher-pane active" id="answerPane">
+          <div class="teacher-grid">
+            <div class="teacher-card">
+              <strong>Current exact wavelength</strong>
+              <span id="teacherLambda">Select a target.</span>
+            </div>
+            <div class="teacher-card">
+              <strong>Model speed used internally</strong>
+              <span id="teacherSpeed">Select a target.</span>
+            </div>
+            <div class="teacher-card">
+              <strong>Model note</strong>
+              <span>Targets are modeled as H II emission regions near named guide objects. Speeds rise near the center and then remain approximately flat, matching the worksheet activity.</span>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="primary" id="teacherExactBtn" type="button">Add exact current target to table</button>
+            <button class="ghost" id="teacherKeyBtn" type="button">Download answer-key CSV</button>
+          </div>
+          <div class="record-table-wrap">
+            <table aria-label="Teacher answer key table">
+              <thead>
+                <tr><th>Guide object</th><th>Guide object type</th><th>Observed target</th><th>Distance (kpc)</th><th>Exact &lambda;<sub>obs</sub> (nm)</th><th>Approx. speed (km/s)</th></tr>
+              </thead>
+              <tbody id="teacherKeyBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="teacher-pane" id="instructionPane">
+          <div class="teacher-card">
+            <strong>Ways to make the activity more collaborative</strong>
+            <ol class="teacher-list">
+              <li><strong>Jigsaw regions:</strong> assign teams to center, inner disk, or outer disk. Each team collects 3-4 emission-region observations, then exchanges data to build a class rotation curve.</li>
+              <li><strong>Instrument roles:</strong> use telescope operator, spectrum reader, recorder, and skeptic/quality checker. Rotate roles after two observations.</li>
+              <li><strong>Blind compare:</strong> two teams observe the same region without seeing each other's estimates. They compare only after recording and discuss differences.</li>
+              <li><strong>Class board:</strong> each team contributes one best data point to a shared table before graphing on paper.</li>
+              <li><strong>Consensus check:</strong> before calculations, teams decide whether the outer disk gas looks slower, faster, or about the same based only on measured wavelengths.</li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="teacher-pane" id="worksheetPane">
+          <div class="worksheet-copy">
+            <h3>Student worksheet copy</h3>
+            <p><strong>Goal:</strong> Use a telescope and spectroscope simulation to observe H-alpha emission from bright ionized hydrogen regions in M31. Record the nearby guide object, distance from center, and estimated observed wavelength.</p>
+            <hr>
+            <p><strong>Data table columns:</strong> Pointing Near / Guide Object | Radius from Galaxy Center (kpc) | Wavelength Obs. lambda_obs (nm) | Delta lambda (nm) | Orbital Speed, |v| (km/s)</p>
+            <p><strong>Student task:</strong> choose several bright H-alpha emission regions at different distances from the center. Each region is shown near a named catalog object, but the measured light is from ionized hydrogen gas. Use the ruler on the spectrum to estimate the H-alpha line. Do all calculations, graphing, mass inference, and CER writing on the paper worksheet.</p>
+            <p><strong>Discussion prompt:</strong> After your group has data, compare with another group. Do emission regions farther from the center appear to slow down in the way the simple central-mass model predicts?</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p class="footer-note">Single-file HTML app. No student data leaves this page.</p>
+  </div>
+
+  <script>
+    const H_ALPHA = 656.28;
+    const C_KM_S = 300000;
+    const SPECTRUM_MIN = 655.8;
+    const SPECTRUM_MAX = 656.8;
+    const STORAGE_KEY = "m31SpectroscopeObservationOnlyRows_v3";
+
+    // Guide-object labels use real M31 identifiers from published/online catalogs.
+    // The observed targets are modeled as nearby H II emission regions.
+    // Positions and wavelength shifts in this classroom simulation are instructional rather than sky-accurate.
+    const namedObjects = [
+      "M31-V1", "M31 RV", "M31-003910.85", "M31-004030.28", "M31-004032.37", "M31-004033.80",
+      "M31-004043.10", "M31-004051.59", "M31-004052.19", "M31-004056.49", "M31-004057.03", "M31-004109.26",
+      "M31-004130.37", "M31-004220.31", "M31-004221.78", "M31-004229.87", "M31-004242.33", "M31-004247.30",
+      "M31-004253.42", "AE And", "M31-004303.21", "M31-004320.97", "M31-004322.50", "AF And",
+      "M31-004334.50", "M31-004337.16", "M31-004339.28", "M31-004341.84", "M31-004350.50", "M31-004406.32",
+      "DIRECT_V7984_M31B", "M31-004410.62", "M31-004410.90", "PSO-J11.0457+41.5548", "M31-004411.36", "M31-004415.00",
+      "M31-004416.28", "M31-004417.10", "Var 15", "M31-004424.21", "M31-004425.18", "M31-004427.76",
+      "M31-004428.99", "M31-004433.58", "M31-004434.65", "M31-004442.07", "M31-004442.28", "M31-004443.57",
+      "M31-004444.01", "M31-004444.52", "Var A1", "PSO-J11.2574+42.0498", "M31-004507.65", "M31-004518.76",
+      "M31-004522.58", "M31-004526.62", "M31-004621.08"
+    ];
+
+    // Catalog classifications are simplified for students. Most entries come from the
+    // M31 & M33 Multi-Epoch BVRI Photometry Catalog. M31-V1 and M31 RV are added from
+    // commonly cited object descriptions because they are not part of that photometry list.
+    const catalogTypes = {
+      "M31-V1": "Cepheid variable star",
+      "M31 RV": "Luminous red variable / red nova candidate",
+      "M31-003910.85": "Candidate LBV / Fe-emission object",
+      "M31-004030.28": "OB supergiant",
+      "M31-004032.37": "OB supergiant",
+      "M31-004033.80": "OB supergiant",
+      "M31-004043.10": "B[e] supergiant",
+      "M31-004051.59": "Yellow supergiant / candidate LBV",
+      "M31-004052.19": "Yellow supergiant",
+      "M31-004056.49": "Of/late-WN star",
+      "M31-004057.03": "B[e] supergiant",
+      "M31-004109.26": "OB supergiant",
+      "M31-004130.37": "Of/late-WN star",
+      "M31-004220.31": "B[e] supergiant",
+      "M31-004221.78": "B[e] supergiant",
+      "M31-004229.87": "B[e] supergiant",
+      "M31-004242.33": "Of/late-WN star",
+      "M31-004247.30": "Yellow supergiant",
+      "M31-004253.42": "OB supergiant",
+      "AE And": "Luminous Blue Variable",
+      "M31-004303.21": "OB supergiant",
+      "M31-004320.97": "B[e] supergiant",
+      "M31-004322.50": "Warm hypergiant",
+      "AF And": "Luminous Blue Variable",
+      "M31-004334.50": "Of/late-WN star",
+      "M31-004337.16": "Yellow supergiant",
+      "M31-004339.28": "OB supergiant",
+      "M31-004341.84": "Of/late-WN star",
+      "M31-004350.50": "Yellow supergiant",
+      "M31-004406.32": "Yellow supergiant",
+      "DIRECT_V7984_M31B": "Unclassified variable target",
+      "M31-004410.62": "Yellow supergiant",
+      "M31-004410.90": "OB supergiant",
+      "PSO-J11.0457+41.5548": "Yellow supergiant",
+      "M31-004411.36": "Candidate LBV / Fe-emission object",
+      "M31-004415.00": "B[e] supergiant",
+      "M31-004416.28": "Peculiar object",
+      "M31-004417.10": "B[e] supergiant",
+      "Var 15": "Luminous Blue Variable",
+      "M31-004424.21": "Yellow supergiant",
+      "M31-004425.18": "OB supergiant / candidate LBV",
+      "M31-004427.76": "Yellow supergiant",
+      "M31-004428.99": "Yellow supergiant",
+      "M31-004433.58": "OB supergiant",
+      "M31-004434.65": "OB supergiant",
+      "M31-004442.07": "OB supergiant",
+      "M31-004442.28": "B[e] supergiant",
+      "M31-004443.57": "OB supergiant",
+      "M31-004444.01": "Candidate LBV / Fe-emission object",
+      "M31-004444.52": "Warm hypergiant",
+      "Var A1": "Luminous Blue Variable",
+      "PSO-J11.2574+42.0498": "OB supergiant",
+      "M31-004507.65": "Yellow supergiant",
+      "M31-004518.76": "Yellow supergiant",
+      "M31-004522.58": "Warm hypergiant",
+      "M31-004526.62": "Luminous Blue Variable",
+      "M31-004621.08": "Warm hypergiant"
+    };
+
+    const galaxyCanvas = document.getElementById("galaxyCanvas");
+    const gctx = galaxyCanvas.getContext("2d");
+    const spectrumCanvas = document.getElementById("spectrumCanvas");
+    const sctx = spectrumCanvas.getContext("2d");
+
+    const targetNameEl = document.getElementById("targetName");
+    const targetHintEl = document.getElementById("targetHint");
+    const radiusValueEl = document.getElementById("radiusValue");
+    const targetMetaEl = document.getElementById("targetMeta");
+    const catalogTypeValueEl = document.getElementById("catalogTypeValue");
+    const estimateInput = document.getElementById("estimateInput");
+    const teamInput = document.getElementById("teamInput");
+    const notesInput = document.getElementById("notesInput");
+    const rulerEstimateEl = document.getElementById("rulerEstimate");
+    const rulerUnitEl = document.getElementById("rulerUnit");
+    const obsTableBody = document.getElementById("obsTableBody");
+    const teacherPanel = document.getElementById("teacherPanel");
+    const teacherToggleBtn = document.getElementById("teacherToggleBtn");
+    const teacherLogin = document.getElementById("teacherLogin");
+    const teacherPassInput = document.getElementById("teacherPassInput");
+    const teacherUnlockBtn = document.getElementById("teacherUnlockBtn");
+    const teacherCancelBtn = document.getElementById("teacherCancelBtn");
+    const teacherPassError = document.getElementById("teacherPassError");
+    const teacherLambda = document.getElementById("teacherLambda");
+    const teacherSpeed = document.getElementById("teacherSpeed");
+    const teacherKeyBody = document.getElementById("teacherKeyBody");
+
+    let backgroundStars = [];
+    let hazePoints = [];
+    let targets = [];
+    let selected = null;
+    let rows = [];
+    let activeZone = "all";
+    let galaxyDragging = false;
+    let rulerDragging = false;
+    let rulerLambda = null;
+    let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+    function mulberry32(seed) {
+      return function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+
+    const rng = mulberry32(314159);
+
+    function rand(min, max) { return min + (max - min) * rng(); }
+
+    function gaussian() {
+      let u = 0, v = 0;
+      while (u === 0) u = rng();
+      while (v === 0) v = rng();
+      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+
+    function setupCanvas(canvas, ctx, cssW, cssH) {
+      dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function galaxyGeometry() {
+      const rect = galaxyCanvas.getBoundingClientRect();
+      return {
+        w: rect.width,
+        h: rect.height,
+        cx: rect.width * 0.5,
+        cy: rect.height * 0.50,
+        a: Math.min(rect.width * 0.38, rect.height * 0.48),
+        b: Math.min(rect.width * 0.11, rect.height * 0.16),
+        angle: -18 * Math.PI / 180
+      };
+    }
+
+    function toScreen(ex, ey, geom) {
+      const ca = Math.cos(geom.angle), sa = Math.sin(geom.angle);
+      return {
+        x: geom.cx + ex * ca - ey * sa,
+        y: geom.cy + ex * sa + ey * ca
+      };
+    }
+
+    function makeScene() {
+      backgroundStars = [];
+      hazePoints = [];
+      targets = [];
+      const geom = galaxyGeometry();
+
+      for (let i = 0; i < 260; i++) {
+        backgroundStars.push({
+          x: rand(0, geom.w),
+          y: rand(0, geom.h),
+          r: rand(0.22, 1.15),
+          a: rand(0.20, 0.78)
+        });
+      }
+
+      for (let i = 0; i < 500; i++) {
+        const r = Math.pow(rng(), 0.58);
+        const theta = rand(0, Math.PI * 2);
+        const ex = Math.cos(theta) * r * geom.a * rand(0.75, 1.08);
+        const ey = Math.sin(theta) * r * geom.b * rand(0.55, 1.20) + gaussian() * geom.b * 0.04;
+        const p = toScreen(ex, ey, geom);
+        const radial = Math.sqrt((ex / geom.a) ** 2 + (ey / geom.b) ** 2);
+        hazePoints.push({ x: p.x, y: p.y, r: rand(0.25, 1.20), a: Math.max(0.03, 0.30 - radial * 0.18) });
+      }
+
+      const radii = [];
+      for (let r = 2; r <= 36; r += 1.45) radii.push(r);
+      radii.sort(() => rng() - 0.5);
+
+      for (let i = 0; i < 54; i++) {
+        const radius = radii[i % radii.length] + rand(-0.55, 0.55);
+        const norm = Math.max(0.05, Math.min(1, radius / 36));
+        const theta = rand(0, Math.PI * 2);
+        const ex = Math.cos(theta) * norm * geom.a;
+        const ey = Math.sin(theta) * norm * geom.b * rand(0.70, 1.15);
+        const p = toScreen(ex, ey, geom);
+        const side = ex >= 0 ? 1 : -1;
+        const speed = flatCurveSpeed(radius);
+        const shift = H_ALPHA * speed / C_KM_S * side;
+        const lambda = H_ALPHA + shift;
+        const guideAngle = rand(0, Math.PI * 2);
+        const guideDistance = rand(7, 15);
+        const guideX = p.x + Math.cos(guideAngle) * guideDistance;
+        const guideY = p.y + Math.sin(guideAngle) * guideDistance * 0.75;
+        const guideName = namedObjects[i % namedObjects.length];
+        targets.push({
+          id: i + 1,
+          name: guideName,
+          type: catalogTypeFor(guideName),
+          observedType: "H II region / ionized hydrogen gas",
+          measuredLight: "H-alpha emission",
+          x: p.x,
+          y: p.y,
+          guideX,
+          guideY,
+          ex,
+          ey,
+          radius: Math.max(1.2, Math.min(36, radius)),
+          lambda,
+          speed,
+          mag: rand(1.8, 3.8),
+          zone: zoneForRadius(radius)
+        });
+      }
+
+      targets.sort((a, b) => a.radius - b.radius);
+      renderTeacherKey();
+    }
+
+    function catalogTypeFor(name) {
+      return catalogTypes[name] || "Catalog classification unavailable";
+    }
+
+    function flatCurveSpeed(r) {
+      const base = 154 * (1 - Math.exp(-r / 3.8));
+      const wiggle = 4 * Math.sin(r * 0.55);
+      return Math.max(40, Math.min(162, base + wiggle));
+    }
+
+    function zoneForRadius(r) {
+      if (r < 8) return "center";
+      if (r < 18) return "inner";
+      return "outer";
+    }
+
+    function drawGalaxy() {
+      const geom = galaxyGeometry();
+      gctx.clearRect(0, 0, geom.w, geom.h);
+
+      const bg = gctx.createRadialGradient(geom.cx, geom.cy, 0, geom.cx, geom.cy, Math.max(geom.w, geom.h) * 0.68);
+      bg.addColorStop(0, "#0b1121");
+      bg.addColorStop(0.55, "#050914");
+      bg.addColorStop(1, "#010309");
+      gctx.fillStyle = bg;
+      gctx.fillRect(0, 0, geom.w, geom.h);
+
+      for (const s of backgroundStars) {
+        gctx.beginPath();
+        gctx.fillStyle = `rgba(255,255,255,${s.a})`;
+        gctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        gctx.fill();
+      }
+
+      gctx.save();
+      gctx.translate(geom.cx, geom.cy);
+      gctx.rotate(geom.angle);
+      const diskGrad = gctx.createRadialGradient(0, 0, 4, 0, 0, geom.a * 1.1);
+      diskGrad.addColorStop(0, "rgba(255,255,240,0.58)");
+      diskGrad.addColorStop(0.18, "rgba(210,220,245,0.35)");
+      diskGrad.addColorStop(0.55, "rgba(160,175,210,0.13)");
+      diskGrad.addColorStop(1, "rgba(110,125,165,0.00)");
+      gctx.fillStyle = diskGrad;
+      gctx.beginPath();
+      gctx.ellipse(0, 0, geom.a * 1.10, geom.b * 1.42, 0, 0, Math.PI * 2);
+      gctx.fill();
+
+      gctx.strokeStyle = "rgba(5, 7, 12, 0.30)";
+      gctx.lineWidth = 11;
+      gctx.beginPath();
+      for (let t = -geom.a * 0.94; t <= geom.a * 0.94; t += 7) {
+        const y = Math.sin(t / geom.a * Math.PI * 1.8) * geom.b * 0.18 + geom.b * 0.13;
+        if (t === -geom.a * 0.94) gctx.moveTo(t, y);
+        else gctx.lineTo(t, y);
+      }
+      gctx.stroke();
+      gctx.restore();
+
+      for (const p of hazePoints) {
+        gctx.beginPath();
+        gctx.fillStyle = `rgba(235,238,245,${p.a})`;
+        gctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        gctx.fill();
+      }
+
+      if (activeZone !== "all") drawZoneOverlay(geom, activeZone);
+
+      for (const t of targets) {
+        const inZone = activeZone === "all" || t.zone === activeZone;
+        const alpha = inZone ? 0.88 : 0.18;
+        const rr = inZone ? t.mag : Math.max(1.1, t.mag * 0.45);
+
+        // Small guide object: the real catalog object used as a nearby landmark.
+        gctx.fillStyle = `rgba(255,255,245,${alpha * 0.75})`;
+        gctx.beginPath();
+        gctx.arc(t.guideX, t.guideY, Math.max(0.9, rr * 0.62), 0, Math.PI * 2);
+        gctx.fill();
+
+        // Clickable observation target: a fuzzy H-alpha emission region / gas cloud.
+        const glow = gctx.createRadialGradient(t.x, t.y, 0, t.x, t.y, rr * 5.8);
+        glow.addColorStop(0, `rgba(255,255,255,${alpha * 0.80})`);
+        glow.addColorStop(0.35, `rgba(210,235,255,${alpha * 0.34})`);
+        glow.addColorStop(0.72, `rgba(180,210,255,${alpha * 0.12})`);
+        glow.addColorStop(1, "rgba(210,220,255,0)");
+        gctx.fillStyle = glow;
+        gctx.beginPath();
+        gctx.ellipse(t.x, t.y, rr * 5.8, rr * 3.7, (t.id % 7) * 0.42, 0, Math.PI * 2);
+        gctx.fill();
+
+        gctx.fillStyle = `rgba(255,255,255,${alpha * 0.74})`;
+        gctx.beginPath();
+        gctx.ellipse(t.x, t.y, rr * 1.45, rr * 1.05, (t.id % 5) * 0.35, 0, Math.PI * 2);
+        gctx.fill();
+      }
+
+      if (selected) {
+        drawReticle(selected.x, selected.y);
+        drawSelectedTargetLabel(selected, geom);
+      }
+    }
+
+    function drawSelectedTargetLabel(target, geom) {
+      const line1 = "Pointing near: " + target.name;
+      const line2 = "Observed: H-alpha emission region";
+      gctx.save();
+      const padX = 10;
+      const boxH = 46;
+      gctx.font = "800 13px system-ui, -apple-system, Segoe UI, sans-serif";
+      const line1W = Math.ceil(gctx.measureText(line1).width);
+      gctx.font = "750 11px system-ui, -apple-system, Segoe UI, sans-serif";
+      const line2W = Math.ceil(gctx.measureText(line2).width);
+      const boxW = Math.max(line1W, line2W) + padX * 2;
+
+      let x = target.x + 18;
+      let y = target.y - 52;
+
+      if (x + boxW > geom.w - 10) x = target.x - boxW - 18;
+      if (x < 10) x = 10;
+      if (y < 10) y = target.y + 34;
+      if (y + boxH > geom.h - 10) y = geom.h - boxH - 10;
+
+      const boxCenterX = x + boxW / 2;
+      const boxCenterY = y + boxH / 2;
+
+      gctx.strokeStyle = "rgba(0, 255, 213, 0.68)";
+      gctx.lineWidth = 1.5;
+      gctx.beginPath();
+      gctx.moveTo(target.x, target.y - 20);
+      gctx.lineTo(boxCenterX, boxCenterY);
+      gctx.stroke();
+
+      gctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+      gctx.shadowBlur = 12;
+      gctx.fillStyle = "rgba(8, 15, 28, 0.93)";
+      roundRect(gctx, x, y, boxW, boxH, 8);
+      gctx.fill();
+      gctx.shadowBlur = 0;
+
+      gctx.strokeStyle = "rgba(0, 255, 213, 0.78)";
+      gctx.lineWidth = 1;
+      roundRect(gctx, x, y, boxW, boxH, 8);
+      gctx.stroke();
+
+      gctx.textBaseline = "top";
+      gctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+      gctx.font = "800 13px system-ui, -apple-system, Segoe UI, sans-serif";
+      gctx.fillText(line1, x + padX, y + 8);
+      gctx.fillStyle = "rgba(205, 255, 246, 0.94)";
+      gctx.font = "750 11px system-ui, -apple-system, Segoe UI, sans-serif";
+      gctx.fillText(line2, x + padX, y + 27);
+      gctx.restore();
+    }
+
+    function roundRect(ctx, x, y, width, height, radius) {
+      const r = Math.min(radius, width / 2, height / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + width - r, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+      ctx.lineTo(x + width, y + height - r);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+      ctx.lineTo(x + r, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    function drawZoneOverlay(geom, zone) {
+      const ranges = { center: [0, 8], inner: [8, 18], outer: [18, 36] };
+      const [minR, maxR] = ranges[zone];
+      const minN = minR / 36;
+      const maxN = maxR / 36;
+      gctx.save();
+      gctx.translate(geom.cx, geom.cy);
+      gctx.rotate(geom.angle);
+      gctx.strokeStyle = "rgba(255, 200, 87, 0.86)";
+      gctx.lineWidth = 2;
+      gctx.setLineDash([7, 7]);
+      if (minN > 0) {
+        gctx.beginPath();
+        gctx.ellipse(0, 0, geom.a * minN, geom.b * minN, 0, 0, Math.PI * 2);
+        gctx.stroke();
+      }
+      gctx.beginPath();
+      gctx.ellipse(0, 0, geom.a * maxN, geom.b * maxN, 0, 0, Math.PI * 2);
+      gctx.stroke();
+      gctx.restore();
+    }
+
+    function drawReticle(x, y) {
+      gctx.save();
+      gctx.strokeStyle = "rgba(0, 255, 213, 0.98)";
+      gctx.lineWidth = 2;
+      gctx.beginPath();
+      gctx.arc(x, y, 19, 0, Math.PI * 2);
+      gctx.stroke();
+      gctx.beginPath();
+      gctx.moveTo(x - 31, y); gctx.lineTo(x - 9, y);
+      gctx.moveTo(x + 9, y); gctx.lineTo(x + 31, y);
+      gctx.moveTo(x, y - 31); gctx.lineTo(x, y - 9);
+      gctx.moveTo(x, y + 9); gctx.lineTo(x, y + 31);
+      gctx.stroke();
+      gctx.strokeStyle = "rgba(0, 255, 213, 0.30)";
+      gctx.lineWidth = 1;
+      gctx.beginPath();
+      gctx.arc(x, y, 42, 0, Math.PI * 2);
+      gctx.stroke();
+      gctx.restore();
+    }
+
+    function spectrumBounds(w, h) {
+      return { left: 60, right: w - 54, top: 26, bandH: h - 122 };
+    }
+
+    function drawSpectrum(target) {
+      const rect = spectrumCanvas.getBoundingClientRect();
+      setupCanvas(spectrumCanvas, sctx, rect.width || 420, rect.height || 250);
+      const w = rect.width || 420;
+      const h = rect.height || 250;
+      const b = spectrumBounds(w, h);
+      sctx.clearRect(0, 0, w, h);
+      sctx.fillStyle = "#05070c";
+      sctx.fillRect(0, 0, w, h);
+
+      if (!target) {
+        drawEmptySpectrum(w, h, b);
+        return;
+      }
+
+      const grad = sctx.createLinearGradient(b.left, 0, b.right, 0);
+      grad.addColorStop(0, "#15171d");
+      grad.addColorStop(0.22, "#252832");
+      grad.addColorStop(0.50, "#3a3d45");
+      grad.addColorStop(0.78, "#242833");
+      grad.addColorStop(1, "#101216");
+      sctx.fillStyle = grad;
+      sctx.fillRect(b.left, b.top, b.right - b.left, b.bandH);
+
+      const plateGlow = sctx.createRadialGradient(w * 0.5, b.top + b.bandH * 0.48, 20, w * 0.5, b.top + b.bandH * 0.48, w * 0.58);
+      plateGlow.addColorStop(0, "rgba(255,255,255,0.18)");
+      plateGlow.addColorStop(0.66, "rgba(0,0,0,0.06)");
+      plateGlow.addColorStop(1, "rgba(0,0,0,0.58)");
+      sctx.fillStyle = plateGlow;
+      sctx.fillRect(b.left, b.top, b.right - b.left, b.bandH);
+
+      for (let i = 0; i < 190; i++) {
+        const x = randFor(i, 2) * (b.right - b.left) + b.left;
+        const y = randFor(i, 5) * b.bandH + b.top;
+        const bright = 0.03 + randFor(i, 8) * 0.13;
+        sctx.fillStyle = `rgba(255,255,255,${bright})`;
+        sctx.fillRect(x, y, 1.2, 1.2);
+      }
+
+      const lx = lambdaToX(target.lambda, b.left, b.right);
+      const lineGrad = sctx.createLinearGradient(lx - 15, 0, lx + 15, 0);
+      lineGrad.addColorStop(0, "rgba(255,255,255,0)");
+      lineGrad.addColorStop(0.42, "rgba(255,255,255,0.80)");
+      lineGrad.addColorStop(0.50, "rgba(255,255,255,1)");
+      lineGrad.addColorStop(0.58, "rgba(255,255,255,0.80)");
+      lineGrad.addColorStop(1, "rgba(255,255,255,0)");
+      sctx.fillStyle = lineGrad;
+      sctx.fillRect(lx - 15, b.top, 30, b.bandH);
+      sctx.fillStyle = "rgba(255,255,255,0.98)";
+      sctx.fillRect(lx - 1.5, b.top - 1, 3, b.bandH + 2);
+
+      sctx.strokeStyle = "rgba(255,255,255,0.28)";
+      sctx.strokeRect(b.left, b.top, b.right - b.left, b.bandH);
+      drawSpectrumAxis(w, h, b);
+      drawRulerIfNeeded(b, h);
+    }
+
+    function drawEmptySpectrum(w, h, b) {
+      const grad = sctx.createLinearGradient(b.left, 0, b.right, 0);
+      grad.addColorStop(0, "#111318");
+      grad.addColorStop(0.50, "#2c3039");
+      grad.addColorStop(1, "#111318");
+      sctx.fillStyle = grad;
+      sctx.fillRect(b.left, b.top, b.right - b.left, b.bandH);
+      sctx.strokeStyle = "rgba(255,255,255,0.24)";
+      sctx.strokeRect(b.left, b.top, b.right - b.left, b.bandH);
+      sctx.fillStyle = "rgba(255,255,255,0.74)";
+      sctx.font = "700 17px system-ui";
+      sctx.textAlign = "center";
+      sctx.fillText("Select an emission region to see its spectrum", w / 2, b.top + b.bandH / 2 + 5);
+      drawSpectrumAxis(w, h, b);
+    }
+
+    function randFor(i, salt) {
+      const x = Math.sin((i + 1) * (salt + 12.9898)) * 43758.5453;
+      return x - Math.floor(x);
+    }
+
+    function lambdaToX(lambda, left, right) {
+      return left + (lambda - SPECTRUM_MIN) / (SPECTRUM_MAX - SPECTRUM_MIN) * (right - left);
+    }
+
+    function xToLambda(x, left, right) {
+      const t = Math.max(0, Math.min(1, (x - left) / (right - left)));
+      return SPECTRUM_MIN + t * (SPECTRUM_MAX - SPECTRUM_MIN);
+    }
+
+    function drawSpectrumAxis(w, h, b) {
+      const axisY = b.top + b.bandH + 36;
+      sctx.strokeStyle = "rgba(255,255,255,0.70)";
+      sctx.lineWidth = 1;
+      sctx.beginPath();
+      sctx.moveTo(b.left, axisY);
+      sctx.lineTo(b.right, axisY);
+      sctx.stroke();
+
+      sctx.fillStyle = "rgba(255,255,255,0.82)";
+      sctx.font = "12px system-ui";
+      sctx.textAlign = "center";
+      for (const tick of [655.8, 656.0, 656.2, 656.4, 656.6, 656.8]) {
+        const x = lambdaToX(tick, b.left, b.right);
+        sctx.strokeStyle = "rgba(255,255,255,0.62)";
+        sctx.beginPath();
+        sctx.moveTo(x, axisY - 7);
+        sctx.lineTo(x, axisY + 7);
+        sctx.stroke();
+        sctx.fillText(tick.toFixed(1), x, axisY + 24);
+      }
+      sctx.fillStyle = "rgba(255,255,255,0.68)";
+      sctx.font = "700 12px system-ui";
+      sctx.fillText("Wavelength (nm)", (b.left + b.right) / 2, h - 12);
+    }
+
+    function drawRulerIfNeeded(b, h) {
+      if (rulerLambda === null) return;
+      const x = lambdaToX(rulerLambda, b.left, b.right);
+      const axisY = b.top + b.bandH + 36;
+      sctx.save();
+      sctx.strokeStyle = "rgba(0, 255, 213, 0.98)";
+      sctx.lineWidth = 2;
+      sctx.beginPath();
+      sctx.moveTo(x, b.top - 8);
+      sctx.lineTo(x, axisY + 14);
+      sctx.stroke();
+      sctx.fillStyle = "rgba(0, 255, 213, 0.16)";
+      sctx.fillRect(x - 5, b.top, 10, b.bandH);
+      sctx.fillStyle = "rgba(0, 255, 213, 0.98)";
+      sctx.beginPath();
+      sctx.moveTo(x, axisY + 18);
+      sctx.lineTo(x - 7, axisY + 31);
+      sctx.lineTo(x + 7, axisY + 31);
+      sctx.closePath();
+      sctx.fill();
+      sctx.fillStyle = "rgba(0, 255, 213, 0.98)";
+      sctx.font = "800 12px system-ui";
+      sctx.textAlign = "center";
+      sctx.fillText(rulerLambda.toFixed(2) + " nm", x, b.top - 12);
+      sctx.restore();
+    }
+
+    function updateRulerDisplay() {
+      if (rulerLambda === null) {
+        rulerEstimateEl.textContent = "";
+        rulerUnitEl.textContent = "";
+      } else {
+        rulerEstimateEl.textContent = rulerLambda.toFixed(2);
+        rulerUnitEl.textContent = "nm";
+      }
+    }
+
+    function setRulerFromEvent(evt) {
+      if (!selected) return;
+      evt.preventDefault();
+      const rect = spectrumCanvas.getBoundingClientRect();
+      const p = evt.touches ? evt.touches[0] : evt;
+      const x = p.clientX - rect.left;
+      const b = spectrumBounds(rect.width || 420, rect.height || 250);
+      rulerLambda = xToLambda(x, b.left, b.right);
+      estimateInput.value = rulerLambda.toFixed(2);
+      updateRulerDisplay();
+      drawSpectrum(selected);
+    }
+
+    spectrumCanvas.addEventListener("pointerdown", evt => { rulerDragging = true; setRulerFromEvent(evt); });
+    spectrumCanvas.addEventListener("pointermove", evt => { if (rulerDragging) setRulerFromEvent(evt); });
+    window.addEventListener("pointerup", () => { rulerDragging = false; galaxyDragging = false; });
+
+    estimateInput.addEventListener("input", () => {
+      const val = Number(estimateInput.value);
+      if (Number.isFinite(val) && val >= SPECTRUM_MIN && val <= SPECTRUM_MAX) {
+        rulerLambda = val;
+      } else {
+        rulerLambda = null;
+      }
+      updateRulerDisplay();
+      drawSpectrum(selected);
+    });
+
+    document.getElementById("clearRulerBtn").addEventListener("click", () => {
+      rulerLambda = null;
+      estimateInput.value = "";
+      updateRulerDisplay();
+      drawSpectrum(selected);
+    });
+
+    function findNearestTarget(x, y) {
+      let best = null;
+      let bestD = Infinity;
+      for (const t of targets) {
+        if (activeZone !== "all" && t.zone !== activeZone) continue;
+        const d = Math.hypot(t.x - x, t.y - y);
+        if (d < bestD) { best = t; bestD = d; }
+      }
+      return best || targets[0] || null;
+    }
+
+    function selectTarget(target) {
+      selected = target;
+      targetNameEl.textContent = target ? target.name : "";
+      targetNameEl.title = target ? target.name : "";
+      targetHintEl.textContent = target ? "Nearby guide object" : "Choose an emission region to begin.";
+      radiusValueEl.textContent = target ? target.radius.toFixed(1) : "";
+      catalogTypeValueEl.textContent = target ? target.type : "Choose a target to begin.";
+      catalogTypeValueEl.title = target ? target.type : "";
+      rulerLambda = null;
+      updateRulerDisplay();
+      if (target) {
+        targetMetaEl.innerHTML = `<span class="tag">Observed: ${target.observedType}</span><span class="tag">${target.measuredLight}</span><span class="tag">${zoneLabel(target.zone)}</span>`;
+        estimateInput.value = "";
+      } else {
+        targetMetaEl.innerHTML = "";
+        estimateInput.value = "";
+      }
+      updateTeacherReadout();
+      drawGalaxy();
+      drawSpectrum(target);
+    }
+
+    function zoneLabel(zone) {
+      if (zone === "center") return "center region";
+      if (zone === "inner") return "inner disk";
+      if (zone === "outer") return "outer disk";
+      return "galaxy disk";
+    }
+
+    function eventPoint(evt) {
+      const rect = galaxyCanvas.getBoundingClientRect();
+      const p = evt.touches ? evt.touches[0] : evt;
+      return { x: p.clientX - rect.left, y: p.clientY - rect.top };
+    }
+
+    function handleAim(evt) {
+      evt.preventDefault();
+      const p = eventPoint(evt);
+      const target = findNearestTarget(p.x, p.y);
+      if (target) selectTarget(target);
+    }
+
+    galaxyCanvas.addEventListener("pointerdown", evt => { galaxyDragging = true; handleAim(evt); });
+    galaxyCanvas.addEventListener("pointermove", evt => { if (galaxyDragging) handleAim(evt); });
+
+    document.getElementById("randomTargetBtn").addEventListener("click", () => {
+      const visible = targets.filter(t => activeZone === "all" || t.zone === activeZone);
+      selectTarget(visible[Math.floor(Math.random() * visible.length)]);
+    });
+
+    document.getElementById("resetAimBtn").addEventListener("click", () => selectTarget(null));
+
+    document.getElementById("clearFormBtn").addEventListener("click", () => {
+      estimateInput.value = "";
+      notesInput.value = "";
+      rulerLambda = null;
+      updateRulerDisplay();
+      drawSpectrum(selected);
+    });
+
+    document.querySelectorAll(".mission-chip").forEach(btn => {
+      btn.addEventListener("click", () => {
+        activeZone = btn.dataset.zone;
+        document.querySelectorAll(".mission-chip").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        if (selected && activeZone !== "all" && selected.zone !== activeZone) selectTarget(null);
+        drawGalaxy();
+      });
+    });
+
+    document.getElementById("addRowBtn").addEventListener("click", () => {
+      if (!selected) {
+        alert("Choose an emission region before adding an observation.");
+        return;
+      }
+      const estimate = estimateInput.value.trim();
+      rows.push({
+        target: selected.name,
+        type: selected.type,
+        radius: selected.radius.toFixed(1),
+        estimate,
+        team: teamInput.value.trim(),
+        notes: notesInput.value.trim()
+      });
+      saveRows();
+      renderRows();
+      estimateInput.value = "";
+      notesInput.value = "";
+      rulerLambda = null;
+      updateRulerDisplay();
+      drawSpectrum(selected);
+    });
+
+    document.getElementById("clearRowsBtn").addEventListener("click", () => {
+      if (rows.length === 0 || confirm("Clear all recorded observations on this device?")) {
+        rows = [];
+        saveRows();
+        renderRows();
+      }
+    });
+
+    document.getElementById("copyRowsBtn").addEventListener("click", async () => {
+      const text = rowsToTSV(rows);
+      if (!text) return alert("No observations to copy yet.");
+      try {
+        await navigator.clipboard.writeText(text);
+        alert("Observation table copied.");
+      } catch (err) {
+        prompt("Copy this table:", text);
+      }
+    });
+
+    document.getElementById("downloadRowsBtn").addEventListener("click", () => {
+      if (!rows.length) return alert("No observations to download yet.");
+      downloadText("m31_observations.csv", rowsToCSV(rows));
+    });
+
+    function renderRows() {
+      if (!rows.length) {
+        obsTableBody.innerHTML = `<tr class="empty-row"><td colspan="6">No observations recorded yet.</td></tr>`;
+        return;
+      }
+      obsTableBody.innerHTML = rows.map((r, idx) => `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>${escapeHTML(r.target)}</td>
+          <td>${escapeHTML(r.radius)}</td>
+          <td>${escapeHTML(r.estimate)}</td>
+          <td>${escapeHTML(r.team)}</td>
+          <td>${escapeHTML(r.notes)}</td>
+        </tr>`).join("");
+    }
+
+    function saveRows() { localStorage.setItem(STORAGE_KEY, JSON.stringify(rows)); }
+    function loadRows() {
+      try { rows = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+      catch { rows = []; }
+      renderRows();
+    }
+
+    function rowsToTSV(data) {
+      if (!data.length) return "";
+      const headers = ["Pointing near", "Distance from center (kpc)", "Estimated lambda_obs (nm)", "Team / initials", "Notes"];
+      return [headers.join("\t")].concat(data.map(r => [r.target, r.radius, r.estimate, r.team, r.notes].join("\t"))).join("\n");
+    }
+
+    function rowsToCSV(data) {
+      const headers = ["Pointing near", "Distance from center (kpc)", "Estimated lambda_obs (nm)", "Team / initials", "Notes"];
+      const lines = [headers].concat(data.map(r => [r.target, r.radius, r.estimate, r.team, r.notes]));
+      return lines.map(row => row.map(csvCell).join(",")).join("\n");
+    }
+
+    function csvCell(value) {
+      const s = String(value || "");
+      return `"${s.replaceAll('"', '""')}"`;
+    }
+
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function escapeHTML(value) {
+      return String(value || "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[c]));
+    }
+
+    function setTeacherExpanded(isOpen) {
+      teacherPanel.classList.toggle("open", isOpen);
+      teacherToggleBtn.setAttribute("aria-expanded", String(isOpen));
+      teacherToggleBtn.textContent = isOpen ? "Hide teacher view" : "Teacher view";
+      if (!isOpen) hideTeacherLogin();
+    }
+
+    function showTeacherLogin() {
+      teacherLogin.classList.add("open");
+      teacherPassError.classList.remove("show");
+      teacherPassInput.value = "";
+      setTimeout(() => teacherPassInput.focus(), 0);
+    }
+
+    function hideTeacherLogin() {
+      teacherLogin.classList.remove("open");
+      teacherPassError.classList.remove("show");
+      teacherPassInput.value = "";
+    }
+
+    function unlockTeacherView() {
+      if (teacherPassInput.value.trim().toLowerCase() === "rubin") {
+        hideTeacherLogin();
+        setTeacherExpanded(true);
+      } else {
+        teacherPassError.classList.add("show");
+        teacherPassInput.select();
+      }
+    }
+
+    teacherToggleBtn.addEventListener("click", () => {
+      if (teacherPanel.classList.contains("open")) {
+        setTeacherExpanded(false);
+      } else if (teacherLogin.classList.contains("open")) {
+        hideTeacherLogin();
+      } else {
+        showTeacherLogin();
+      }
+    });
+
+    teacherUnlockBtn.addEventListener("click", unlockTeacherView);
+    teacherCancelBtn.addEventListener("click", hideTeacherLogin);
+    teacherPassInput.addEventListener("keydown", event => {
+      if (event.key === "Enter") unlockTeacherView();
+      if (event.key === "Escape") hideTeacherLogin();
+    });
+
+    document.getElementById("closeTeacherBtn").addEventListener("click", () => setTeacherExpanded(false));
+
+    document.querySelectorAll(".teacher-tab").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".teacher-tab").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".teacher-pane").forEach(p => p.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.pane).classList.add("active");
+      });
+    });
+
+    document.getElementById("teacherExactBtn").addEventListener("click", () => {
+      if (!selected) return alert("Select an emission region first.");
+      rows.push({
+        target: selected.name,
+        type: selected.type,
+        radius: selected.radius.toFixed(1),
+        estimate: selected.lambda.toFixed(2),
+        team: "Teacher exact",
+        notes: `Observed target: ${selected.observedType}; internal model speed: ${selected.speed.toFixed(0)} km/s`
+      });
+      saveRows();
+      renderRows();
+    });
+
+    document.getElementById("teacherKeyBtn").addEventListener("click", () => {
+      const key = targets.slice().sort((a, b) => a.radius - b.radius).map(t => ({
+        target: t.name,
+        type: t.type,
+        observedType: t.observedType,
+        radius: t.radius.toFixed(1),
+        estimate: t.lambda.toFixed(2),
+        team: `${t.speed.toFixed(0)} km/s`,
+        notes: zoneLabel(t.zone)
+      }));
+      const headers = ["Guide object", "Guide object type", "Observed target", "Distance (kpc)", "Exact lambda_obs (nm)", "Approx speed (km/s)", "Region"];
+      const csv = [headers].concat(key.map(k => [k.target, k.type, k.observedType, k.radius, k.estimate, k.team, k.notes])).map(row => row.map(csvCell).join(",")).join("\n");
+      downloadText("m31_teacher_answer_key.csv", csv);
+    });
+
+    function updateTeacherReadout() {
+      teacherLambda.textContent = selected ? `${selected.lambda.toFixed(3)} nm` : "Select a target.";
+      teacherSpeed.textContent = selected ? `${selected.speed.toFixed(0)} km/s` : "Select a target.";
+    }
+
+    function renderTeacherKey() {
+      teacherKeyBody.innerHTML = targets.slice().sort((a, b) => a.radius - b.radius).slice(0, 36).map(t => `
+        <tr><td>${escapeHTML(t.name)}</td><td>${escapeHTML(t.type)}</td><td>${escapeHTML(t.observedType)}</td><td>${t.radius.toFixed(1)}</td><td>${t.lambda.toFixed(3)}</td><td>${t.speed.toFixed(0)}</td></tr>
+      `).join("");
+    }
+
+    function resizeAll() {
+      const grect = galaxyCanvas.getBoundingClientRect();
+      setupCanvas(galaxyCanvas, gctx, grect.width || 720, grect.height || 430);
+      makeScene();
+      if (selected) {
+        const replacement = targets.find(t => t.name === selected.name) || null;
+        selected = replacement;
+      }
+      drawGalaxy();
+      drawSpectrum(selected);
+      updateTeacherReadout();
+    }
+
+    let resizeTimer;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(resizeAll, 160);
+    });
+
+    loadRows();
+    updateRulerDisplay();
+    resizeAll();
+    drawSpectrum(null);
+  </script>
+</body>
+</html>
