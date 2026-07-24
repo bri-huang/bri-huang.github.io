@@ -1,0 +1,2153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Science Dept. Schedule Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+        
+        .table-container { 
+            scrollbar-width: thin; 
+            scrollbar-color: #94a3b8 #f1f5f9; 
+        }
+        .table-container::-webkit-scrollbar { height: 10px; width: 10px; }
+        .table-container::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 6px; }
+        .table-container::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 6px; border: 2px solid #f1f5f9; }
+        .table-container::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        
+        
+        .sticky-col { position: sticky; left: 0; background-color: #f8fafc; z-index: 10; border-right: 1px solid #e2e8f0; box-shadow: 4px 0 8px -2px rgba(0,0,0,0.05); }
+        thead th { position: sticky; top: 0; background-color: #f8fafc; z-index: 20; box-shadow: 0 1px 0 #e2e8f0; }
+        thead th.sticky-col { z-index: 30; box-shadow: 4px 1px 8px -2px rgba(0,0,0,0.05), 0 1px 0 #e2e8f0; }
+        
+        .draggable-class { cursor: grab; }
+        .draggable-class:active { cursor: grabbing; opacity: 0.6; }
+        .dropzone-td.drag-over { background-color: #eff6ff !important; border: 2px dashed #3b82f6 !important; }
+        
+        /* Striped blocked room pattern */
+        .blocked-stripes {
+            background-color: #fee2e2;
+            background-image: repeating-linear-gradient(45deg, transparent, transparent 10px, #fca5a5 10px, #fca5a5 20px);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans flex flex-col h-screen">
+    
+    <div id="app-root" class="flex flex-col h-full w-full max-w-[100%] mx-auto p-3 md:p-5 space-y-3">
+        <!-- Rendered via JavaScript -->
+    </div>
+
+    <script>
+        const state = {
+            fileName: '',
+            dataLoaded: false,
+            errorMsg: '',
+            periods: ['1', '2', '3', '4', '5', '6', '7', '8'],
+            rawRows: [],       
+            headers: [],       
+            flattened: [],     // Original parsed baseline
+            rooms: [],         
+            teachers: [],      
+            view: 'list',      
+            listTab: 'all',    
+            sort: { key: 'Period', dir: 'asc' },
+            suggestions: [],   
+            proposed: [],      // Live editable schedule
+            blockedSlots: {},  // Key: 'Period-Room' -> boolean (In-Use externally)
+            preferences: {},   
+            courseTeams: [
+                { id: 'physics', name: 'Physics', color: '#2563eb' },
+                { id: 'chemistry', name: 'Chemistry', color: '#d97706' },
+                { id: 'biology', name: 'Biology', color: '#059669' },
+                { id: 'electives', name: 'Electives', color: '#7c3aed' },
+                { id: 'engineering', name: 'Engineering', color: '#ea580c' },
+                { id: 'cs', name: 'CS', color: '#0891b2' }
+            ],
+            teacherCourseTeams: {},
+            selectedTeacherForPrefs: null,
+            commonPrepPeriod: 'all',
+            commonPrepTeamFilter: 'all',
+            useSuperOptimizer: false,
+            metrics: [],
+            draggedClassId: null,
+            globalPeriodRulesText: '', 
+            globalRoomRulesText: '',
+            changeLog: [] // Tracks all actions for documentation
+        };
+
+        function logAction(actionType, details) {
+            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            state.changeLog.unshift({ timestamp, actionType, details });
+        }
+
+        function scrollTable(direction) {
+            const containers = document.querySelectorAll('.table-container');
+            containers.forEach(c => {
+                const amount = 350;
+                c.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
+            });
+        }
+
+        function parseCSV(text) {
+            let p = '', row = [''], ret = [row], i = 0, r = 0, s = !0, l;
+            for (l of text) {
+                if ('"' === l) {
+                    if (s && l === p) row[i] += l; 
+                    s = !s; 
+                } else if (',' === l && s) {
+                    l = row[++i] = ''; 
+                } else if ('\n' === l && s) {
+                    if ('\r' === p) row[i] = row[i].slice(0, -1);
+                    row = ret[++r] = [l = '']; 
+                    i = 0;
+                } else {
+                    row[i] += l;
+                }
+                p = l;
+            }
+            return ret.filter(r => r.length > 1 || r[0].trim() !== '');
+        }
+
+        function parseCell(cellStr) {
+            if (!cellStr) return null;
+            const parts = cellStr.split('\n').map(p => p.trim()).filter(p => p);
+            if (parts.length === 0) return null;
+
+            let course = "", room = "", coteacher = "";
+            const cttIdx = parts.indexOf("CTT");
+            
+            if (cttIdx !== -1) {
+                course = parts.slice(0, cttIdx).join(" ");
+                if (cttIdx + 1 < parts.length) coteacher = parts[cttIdx + 1];
+                if (cttIdx + 2 < parts.length) room = parts[parts.length - 1]; 
+            } else {
+                const lastPart = parts[parts.length - 1];
+                if (parts.length > 1 && /^\d{3}$/.test(lastPart)) {
+                    room = lastPart;
+                    course = parts.slice(0, -1).join(" ");
+                } else {
+                    if (parts.length > 1) {
+                        if (/\d/.test(lastPart)) {
+                            room = lastPart;
+                            course = parts.slice(0, -1).join(" ");
+                        } else {
+                            course = parts.join(" ");
+                        }
+                    } else {
+                        course = parts[0];
+                    }
+                }
+            }
+            return { course, room, coteacher };
+        }
+
+        function calcMetrics(classes) {
+            let rooms = new Set();
+            let transitions = 0;
+            let classByPeriod = {};
+            
+            classes.forEach(c => {
+                if (c.Room && !c.Room.includes('TBD')) {
+                    rooms.add(c.Room);
+                    classByPeriod[parseInt(c.Period)] = c.Room;
+                }
+            });
+            
+            for(let i = 1; i <= 7; i++) {
+                if (classByPeriod[i] && classByPeriod[i+1] && classByPeriod[i] !== classByPeriod[i+1]) {
+                    transitions++;
+                }
+            }
+            return { uniqueRooms: rooms.size, transitions };
+        }
+
+        function updateConflicts(data) {
+            data.forEach(item => item.isConflict = false);
+            const roomUsage = {};
+            data.forEach(item => {
+                if (item.Room) { 
+                    const key = `${item.Period}-${item.Room}`;
+                    if (!roomUsage[key]) roomUsage[key] = [];
+                    roomUsage[key].push(item);
+                }
+            });
+
+            // Virtual external blocks also flag conflict markers
+            Object.keys(state.blockedSlots).forEach(blockKey => {
+                if (state.blockedSlots[blockKey]) {
+                    if (!roomUsage[blockKey]) roomUsage[blockKey] = [];
+                    roomUsage[blockKey].push({ isDummyBlocker: true });
+                }
+            });
+
+            Object.values(roomUsage).forEach(group => {
+                if (group.length > 1) {
+                    group.forEach(item => {
+                        if (!item.isDummyBlocker) item.isConflict = true;
+                    });
+                }
+            });
+        }
+
+        function updateMetrics() {
+            state.metrics = [];
+            state.teachers.forEach(t => {
+                let origClasses = state.flattened.filter(c => c.Teacher === t.name);
+                let propClasses = state.proposed.filter(c => c.Teacher === t.name);
+                let origMet = calcMetrics(origClasses);
+                let propMet = calcMetrics(propClasses);
+                state.metrics.push({ teacher: t.name, origRooms: origMet.uniqueRooms, propRooms: propMet.uniqueRooms, origTrans: origMet.transitions, propTrans: propMet.transitions });
+            });
+        }
+
+        function parseRuleText(text) {
+            let rules = {};
+            if (!text) return rules;
+            text.split('\n').forEach(line => {
+                if (line.includes(':')) {
+                    let parts = line.split(':');
+                    let course = parts[0].trim().toLowerCase().replace(/\s+/g, ' ');
+                    let values = parts[1].split(',').map(p => p.trim()).filter(p => p);
+                    if (course && values.length) rules[course] = values;
+                }
+            });
+            return rules;
+        }
+
+        function processData(csvText) {
+            try {
+                state.errorMsg = '';
+                state.useSuperOptimizer = false; 
+                state.blockedSlots = {}; 
+                state.changeLog = [];
+                const parsed = parseCSV(csvText);
+                if (parsed.length < 2) {
+                    state.errorMsg = "Invalid CSV format. Needs headers and data.";
+                    return;
+                }
+
+                state.rawRows = parsed.map(row => [...row]);
+                state.headers = parsed[0].map(h => h.trim());
+                const teacherIdx = state.headers.findIndex(h => h.toLowerCase() === 'teacher');
+                
+                if (teacherIdx === -1) {
+                    state.errorMsg = "Could not find a 'Teacher' column in your CSV. Ensure headers exist.";
+                    return;
+                }
+
+                let flattenedData = [];
+                let idCounter = 1;
+                let teacherList = [];
+
+                for (let i = 1; i < parsed.length; i++) {
+                    const row = parsed[i];
+                    if (row.length <= teacherIdx || !row[teacherIdx]) continue;
+                    
+                    const rawTeacher = row[teacherIdx];
+                    const teacherName = rawTeacher.split('\n')[0].trim();
+                    if (!teacherName) continue;
+                    
+                    teacherList.push({ name: teacherName, rowData: row });
+                    if (!state.preferences[teacherName]) {
+                        state.preferences[teacherName] = { rooms: [], preps: [], max3: true };
+                    }
+
+                    state.periods.forEach(period => {
+                        const pIdx = state.headers.indexOf(period);
+                        if (pIdx !== -1 && row[pIdx] && row[pIdx].trim() !== '') {
+                            const rawContent = row[pIdx];
+                            
+                            if (/\b(prep|planning)\b/i.test(rawContent)) {
+                                if (!state.preferences[teacherName].preps.includes(period)) {
+                                    state.preferences[teacherName].preps.push(period);
+                                }
+                                return; 
+                            }
+
+                            const parsedCell = parseCell(rawContent);
+                            if (parsedCell) {
+                                flattenedData.push({
+                                    id: idCounter++,
+                                    Period: period,
+                                    Teacher: teacherName,
+                                    Course: parsedCell.course,
+                                    Room: parsedCell.room,
+                                    Coteacher: parsedCell.coteacher,
+                                    isConflict: false,
+                                    raw: rawContent
+                                });
+                            }
+                        }
+                    });
+                }
+
+                // Alphabetizing teachers alphabetically by last name with high precision base-sensitivity
+                teacherList.sort((a, b) => a.name.trim().localeCompare(b.name.trim(), undefined, {sensitivity: 'base'}));
+
+                teacherList.forEach(t => {
+                    let tClasses = flattenedData.filter(c => c.Teacher === t.name && c.Room);
+                    let counts = {};
+                    tClasses.forEach(c => counts[c.Room] = (counts[c.Room] || 0) + 1);
+                    let sortedRooms = Object.keys(counts).sort((a,b) => counts[b] - counts[a]);
+                    if (sortedRooms.length > 0 && !state.preferences[t.name].rooms.includes(sortedRooms[0])) {
+                        state.preferences[t.name].rooms.push(sortedRooms[0]);
+                    }
+                });
+
+                updateConflicts(flattenedData);
+
+                const uniqueRooms = new Set(flattenedData.map(d => d.Room).filter(r => r));
+                state.rooms = Array.from(uniqueRooms).sort();
+                
+                state.flattened = JSON.parse(JSON.stringify(flattenedData));
+                state.proposed = JSON.parse(JSON.stringify(flattenedData));
+                state.teachers = teacherList;
+                const inferredTeamCount = inferCourseTeamsFromSchedule(flattenedData, teacherList);
+                
+                if (!state.selectedTeacherForPrefs && teacherList.length > 0) {
+                    state.selectedTeacherForPrefs = teacherList[0].name;
+                }
+
+                state.suggestions = []; 
+                logAction("CSV Loaded", `Successfully imported ${state.fileName || 'file'} containing ${flattenedData.length} active classes.`);
+                if (inferredTeamCount) logAction("Course Teams Inferred", `Automatically assigned ${inferredTeamCount} teacher${inferredTeamCount === 1 ? '' : 's'} to a clear default course team based on teaching load.`);
+                generateSuggestions(); 
+                updateMetrics();
+                
+                state.dataLoaded = true;
+            } catch (err) {
+                console.error(err);
+                state.errorMsg = "Critical parser error: Check columns of " + (state.fileName || "file") + ". Details: " + err.message;
+                state.dataLoaded = false;
+            }
+        }
+
+        function generateSuggestions() {
+            let simulated = JSON.parse(JSON.stringify(state.proposed)); 
+            let suggestions = [];
+            let parsedRoomRules = parseRuleText(state.globalRoomRulesText);
+
+            let teacherSchedule = {};
+            state.teachers.forEach(t => {
+                teacherSchedule[t.name] = {
+                    usedPeriods: simulated.filter(c => c.Teacher === t.name).map(c => c.Period)
+                };
+            });
+
+            simulated.forEach(c => {
+                let prefs = state.preferences[c.Teacher] || { rooms: [], preps: [], max3: true };
+                if (prefs.preps.includes(c.Period)) {
+                    let emptyPeriods = state.periods.filter(p => 
+                        !teacherSchedule[c.Teacher].usedPeriods.includes(p) && 
+                        !prefs.preps.includes(p)
+                    );
+
+                    if (emptyPeriods.length > 0) {
+                        let newPeriod = emptyPeriods[0];
+                        suggestions.push({
+                            type: 'Period Move', 
+                            period: `${c.Period} → ${newPeriod}`,
+                            teacher: c.Teacher, course: c.Course, roomChange: c.Room ? `${c.Room} → TBD` : 'TBD',
+                            reason: `Requested Period ${c.Period} as a Planning Period.`,
+                            actionData: { id: c.id, newPeriod: newPeriod, newRoom: c.Room }
+                        });
+                        
+                        teacherSchedule[c.Teacher].usedPeriods = teacherSchedule[c.Teacher].usedPeriods.filter(p => p !== c.Period);
+                        teacherSchedule[c.Teacher].usedPeriods.push(newPeriod);
+                        
+                        c.oldRoomLog = c.Room;
+                        c.Period = newPeriod;
+                        c.Room = ''; 
+                        c.needsNewRoom = true;
+                    }
+                }
+            });
+
+            const teacherRoomCounts = {};
+            simulated.forEach(c => {
+                if (!c.Room) return;
+                if (!teacherRoomCounts[c.Teacher]) teacherRoomCounts[c.Teacher] = {};
+                teacherRoomCounts[c.Teacher][c.Room] = (teacherRoomCounts[c.Teacher][c.Room] || 0) + 1;
+            });
+
+            state.periods.forEach(period => {
+                let pClasses = simulated.filter(c => c.Period === period);
+                let roomMap = {};
+                
+                pClasses.forEach(c => {
+                    if (c.Room && !c.needsNewRoom) {
+                        if (!roomMap[c.Room]) roomMap[c.Room] = [];
+                        roomMap[c.Room].push(c);
+                    }
+                });
+
+                Object.keys(roomMap).forEach(room => {
+                    let occupants = roomMap[room];
+                    if (occupants.length > 1) {
+                        occupants.sort((a, b) => {
+                            let prefsA = state.preferences[a.Teacher] || { rooms: [] };
+                            let prefsB = state.preferences[b.Teacher] || { rooms: [] };
+                            let scoreA = (prefsA.rooms.includes(room) ? 1000 : 0) + (teacherRoomCounts[a.Teacher]?.[room] || 0);
+                            let scoreB = (prefsB.rooms.includes(room) ? 1000 : 0) + (teacherRoomCounts[b.Teacher]?.[room] || 0);
+                            return scoreB - scoreA;
+                        });
+
+                        for (let i = 1; i < occupants.length; i++) {
+                            let movingClass = occupants[i];
+                            movingClass.needsNewRoom = true;
+                            movingClass.oldRoomLog = room;
+                            movingClass.conflictLog = true;
+                        }
+                    }
+                });
+
+                pClasses.forEach(c => {
+                    if (c.needsNewRoom) return; 
+                    let prefs = state.preferences[c.Teacher] || { rooms: [] };
+                    
+                    if (c.Room && prefs.rooms.length > 0 && !prefs.rooms.includes(c.Room)) {
+                        let usedRooms = pClasses.filter(x => x.Room && !x.needsNewRoom).map(x => x.Room);
+                        let availablePrefRooms = prefs.rooms.filter(r => state.rooms.includes(r) && !usedRooms.includes(r));
+                        if (availablePrefRooms.length > 0) {
+                            c.needsNewRoom = true;
+                            c.oldRoomLog = c.Room;
+                            c.consolidationLog = true;
+                        }
+                    }
+                });
+
+                let movingClasses = pClasses.filter(c => c.needsNewRoom);
+                
+                movingClasses.forEach(movingClass => {
+                    let usedRooms = pClasses.filter(c => c.Room && !c.needsNewRoom).map(c => c.Room);
+                    let freeRooms = state.rooms.filter(r => !usedRooms.includes(r) && !state.blockedSlots[`${period}-${r}`]);
+
+                    let normName = movingClass.Course.toLowerCase().replace(/\s+/g, ' ');
+                    let matchedRule = Object.keys(parsedRoomRules).find(r => normName.includes(r));
+                    
+                    if (matchedRule) {
+                        let allowedRooms = parsedRoomRules[matchedRule];
+                        let validFree = freeRooms.filter(r => allowedRooms.includes(r));
+                        if (validFree.length > 0) {
+                            freeRooms = validFree;
+                        } else {
+                            freeRooms = allowedRooms; 
+                        }
+                    }
+
+                    if (freeRooms.length === 0) {
+                        if(movingClass.conflictLog || movingClass.consolidationLog) {
+                           suggestions.push({ 
+                               type: 'Warning', period: movingClass.Period, teacher: movingClass.Teacher, course: movingClass.Course, 
+                               roomChange: `${movingClass.oldRoomLog || 'None'} → None`, reason: 'No available rooms found for reassignment.' 
+                            });
+                        }
+                        return;
+                    }
+
+                    let prefs = state.preferences[movingClass.Teacher] || { rooms: [] };
+                    let bestRoom = freeRooms[0];
+                    let bestScore = -1;
+                    let bestReason = "Assigned available free room.";
+
+                    freeRooms.forEach(fr => {
+                        let score = 0;
+                        let reasonParts = [];
+                        
+                        if (prefs.rooms.includes(fr)) {
+                            score += 1000;
+                            reasonParts.push(`Requested preferred room`);
+                        }
+
+                        let usages = teacherRoomCounts[movingClass.Teacher]?.[fr] || 0;
+                        if (usages > 0) {
+                            score += 50 + usages;
+                            reasonParts.push(`Consolidated (used ${usages} other times)`);
+                        }
+
+                        let pNum = parseInt(period);
+                        if (!isNaN(pNum)) {
+                            let adjClasses = simulated.filter(c => c.Teacher === movingClass.Teacher && (c.Period === String(pNum - 1) || c.Period === String(pNum + 1)));
+                            if (adjClasses.some(c => c.Room === fr)) {
+                                score += 100;
+                                reasonParts.push(`Minimized transition (same room adj. period)`);
+                            }
+                        }
+
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestRoom = fr;
+                            bestReason = reasonParts.length > 0 ? reasonParts.join(', ') + '.' : 'Assigned to minimize movement.';
+                        }
+                    });
+
+                    if (matchedRule) bestReason = "Forced due to Global Room Constraints. " + bestReason;
+
+                    movingClass.Room = bestRoom;
+                    movingClass.needsNewRoom = false;
+                    
+                    if (movingClass.conflictLog) {
+                        suggestions.push({ 
+                            type: 'Room Conflict', period: movingClass.Period, teacher: movingClass.Teacher, course: movingClass.Course, 
+                            roomChange: `${movingClass.oldRoomLog} → ${bestRoom}`, 
+                            reason: `Conflict resolved. ` + bestReason,
+                            actionData: { id: movingClass.id, newRoom: bestRoom, newPeriod: movingClass.Period }
+                        });
+                    } else if (movingClass.consolidationLog || movingClass.oldRoomLog) {
+                        let existing = suggestions.find(s => s.type === 'Period Move' && s.course === movingClass.Course && s.teacher === movingClass.Teacher);
+                        if(existing) {
+                             existing.roomChange = `${movingClass.oldRoomLog || 'None'} → ${bestRoom}`;
+                             existing.actionData.newRoom = bestRoom;
+                        } else {
+                            suggestions.push({ 
+                                type: 'Optimization', period: movingClass.Period, teacher: movingClass.Teacher, course: movingClass.Course, 
+                                roomChange: `${movingClass.oldRoomLog || 'None'} → ${bestRoom}`, 
+                                reason: bestReason,
+                                actionData: { id: movingClass.id, newRoom: bestRoom, newPeriod: movingClass.Period }
+                            });
+                        }
+                    }
+                    pClasses.push(movingClass); 
+                });
+            });
+
+            state.suggestions = suggestions;
+        }
+
+        function runRandomOptimizer() {
+            let bestCandidate = null;
+            let bestScore = Infinity;
+
+            let parsedRules = parseRuleText(state.globalPeriodRulesText);
+            let parsedRoomRules = parseRuleText(state.globalRoomRulesText);
+
+            for (let i = 0; i < 200; i++) {
+                let candidate = JSON.parse(JSON.stringify(state.flattened));
+                let score = 0;
+                let usedRoomsByPeriod = { '1':[], '2':[], '3':[], '4':[], '5':[], '6':[], '7':[], '8':[] };
+
+                state.teachers.forEach(t => {
+                    let myClasses = candidate.filter(c => c.Teacher === t.name);
+                    let myPrefs = state.preferences[t.name] || { rooms: [], preps: [], max3: true };
+                    
+                    let assignedPeriods = new Set();
+                    
+                    myClasses.forEach(c => {
+                        let normName = c.Course.toLowerCase().replace(/\s+/g, ' ');
+                        let matchedRule = Object.keys(parsedRules).find(r => normName.includes(r));
+                        if (matchedRule) {
+                            let allowed = parsedRules[matchedRule];
+                            let chosen = allowed[Math.floor(Math.random() * allowed.length)];
+                            c.Period = chosen;
+                            assignedPeriods.add(chosen);
+                            c._isConstrained = true;
+                        } else {
+                            c._isConstrained = false;
+                        }
+                    });
+
+                    let availableForRest = state.periods.filter(p => !assignedPeriods.has(p));
+                    let unconstrainedCount = myClasses.filter(c => !c._isConstrained).length;
+                    let nonPrepAvailable = availableForRest.filter(p => !myPrefs.preps.includes(p));
+                    
+                    let poolToDrawFrom = (nonPrepAvailable.length >= unconstrainedCount) ? nonPrepAvailable : availableForRest;
+                    poolToDrawFrom.sort(() => Math.random() - 0.5); 
+                    
+                    let poolIdx = 0;
+                    myClasses.forEach(c => {
+                        if (!c._isConstrained) {
+                            if (poolIdx < poolToDrawFrom.length) {
+                                c.Period = poolToDrawFrom[poolIdx++];
+                                assignedPeriods.add(c.Period);
+                            } else {
+                                let emergencyPool = state.periods.filter(p => !assignedPeriods.has(p));
+                                if(emergencyPool.length > 0) {
+                                    c.Period = emergencyPool[0];
+                                    assignedPeriods.add(c.Period);
+                                } else {
+                                    c.Period = '1'; 
+                                }
+                            }
+                        }
+                    });
+                });
+
+                state.periods.forEach(period => {
+                    let pClasses = candidate.filter(c => c.Period === period);
+                    pClasses.sort(() => Math.random() - 0.5); 
+                    
+                    pClasses.forEach(c => {
+                        let myPrefs = state.preferences[c.Teacher] || { rooms: [], preps: [] };
+                        let freeRooms = state.rooms.filter(r => !usedRoomsByPeriod[period].includes(r) && !state.blockedSlots[`${period}-${r}`]);
+                        
+                        let normName = c.Course.toLowerCase().replace(/\s+/g, ' ');
+                        let matchedRule = Object.keys(parsedRoomRules).find(r => normName.includes(r));
+                        
+                        if (matchedRule) {
+                            let allowedRooms = parsedRoomRules[matchedRule];
+                            let validFree = freeRooms.filter(r => allowedRooms.includes(r));
+                            if (validFree.length > 0) {
+                                freeRooms = validFree;
+                            } else {
+                                freeRooms = allowedRooms; 
+                            }
+                        }
+
+                        if (freeRooms.length === 0) {
+                            score += 10000; 
+                            return;
+                        }
+
+                        let roomScores = freeRooms.map(r => {
+                            let rScore = Math.random() * 10; 
+                            if (myPrefs.rooms.includes(r)) rScore += 100;
+                            
+                            let pNum = parseInt(c.Period);
+                            let prevClass = candidate.find(x => x.Teacher === c.Teacher && x.Period === String(pNum - 1));
+                            if (prevClass && prevClass.Room === r) rScore += 80;
+                            
+                            return { room: r, score: rScore };
+                        });
+                        
+                        roomScores.sort((a, b) => b.score - a.score);
+                        let chosenRoom = roomScores[0].room;
+                        
+                        c.Room = chosenRoom;
+                        c.isConflict = false;
+                        usedRoomsByPeriod[period].push(chosenRoom);
+                    });
+                });
+
+                state.teachers.forEach(t => {
+                    let myClasses = candidate.filter(c => c.Teacher === t.name);
+                    
+                    let pSet = new Set(myClasses.map(c => c.Period));
+                    if (pSet.size < myClasses.length) score += 50000;
+
+                    let myPrefs = state.preferences[t.name] || { max3: true };
+                    if (myPrefs.max3 !== false) {
+                        let sortedP = Array.from(pSet).map(Number).sort((a,b)=>a-b);
+                        let maxConsec = 0, curr = 1;
+                        for(let j=1; j<sortedP.length; j++) {
+                            if(sortedP[j] === sortedP[j-1]+1) curr++;
+                            else { maxConsec = Math.max(maxConsec, curr); curr = 1; }
+                        }
+                        maxConsec = Math.max(maxConsec, curr);
+                        if (maxConsec > 3) {
+                            score += 5000 * (maxConsec - 3); 
+                        }
+                    }
+
+                    let metrics = calcMetrics(myClasses);
+                    score += metrics.uniqueRooms * 20;
+                    score += metrics.transitions * 50;
+                });
+
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestCandidate = candidate;
+                }
+            }
+
+            updateConflicts(bestCandidate);
+
+            state.proposed = bestCandidate;
+            state.view = 'teacher'; 
+            state.suggestions = []; 
+            
+            logAction("Optimizer Engine", "Executed Monte Carlo optimizer algorithm to automatically balance classrooms & minimize transitions.");
+            updateMetrics();
+            render();
+        }
+
+        function convertToCSV(rows) {
+            return rows.map(r => r.map(val => {
+                // Preserve line breaks because the imported schedule format uses
+                // them to separate course, co-teacher, and room information.
+                let text = String(val || "").replace(/"/g, '""').trim();
+                return `"${text}"`;
+            }).join(',')).join('\n');
+        }
+
+        function escapeHTML(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function getCourseTeam(teamId) {
+            return state.courseTeams.find(team => team.id === teamId) || null;
+        }
+
+        function getTeacherCourseTeam(teacherName) {
+            return getCourseTeam(state.teacherCourseTeams[teacherName]);
+        }
+
+        function normalizeTeamColor(color) {
+            return /^#[0-9a-f]{6}$/i.test(color || '') ? color : '#64748b';
+        }
+
+        const COURSE_TEAM_STORAGE_KEY = 'science-schedule-course-teams-v1';
+
+        function persistCourseTeamData() {
+            try {
+                localStorage.setItem(COURSE_TEAM_STORAGE_KEY, JSON.stringify({
+                    courseTeams: state.courseTeams,
+                    teacherCourseTeams: state.teacherCourseTeams
+                }));
+            } catch (err) {
+                console.warn('Course team preferences could not be saved locally.', err);
+            }
+        }
+
+        function restoreCourseTeamData() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(COURSE_TEAM_STORAGE_KEY) || 'null');
+                if (saved && Array.isArray(saved.courseTeams) && saved.teacherCourseTeams && typeof saved.teacherCourseTeams === 'object') {
+                    state.courseTeams = saved.courseTeams;
+                    state.teacherCourseTeams = saved.teacherCourseTeams;
+                }
+            } catch (err) {
+                console.warn('Saved course team preferences could not be restored.', err);
+            }
+        }
+
+        function classifyCourseForDefaultTeam(courseName) {
+            const course = String(courseName || '');
+            if (/\b(computer science|programming|coding|cybersecurity|cyber|ap csp|ap csa|cs)\b/i.test(course)) return 'CS';
+            if (/\b(engineering|pltw|principles of engineering|introduction to engineering|intro to engineering|ied|digital electronics)\b/i.test(course)) return 'Engineering';
+            if (/\bphysics\b/i.test(course)) return 'Physics';
+            if (/\b(chemistry|chem)\b/i.test(course)) return 'Chemistry';
+            if (/\b(biology|bio)\b/i.test(course)) return 'Biology';
+            if (/\b(elective|astronomy|forensics|forensic science|environmental science|earth science|geology)\b/i.test(course)) return 'Electives';
+            return null;
+        }
+
+        function inferCourseTeamsFromSchedule(classes, teachers) {
+            let assignedCount = 0;
+            teachers.forEach(teacher => {
+                if (getTeacherCourseTeam(teacher.name)) return;
+                const teacherClasses = classes.filter(cls => cls.Teacher === teacher.name);
+                const counts = {};
+                teacherClasses.forEach(cls => {
+                    const teamName = classifyCourseForDefaultTeam(cls.Course);
+                    if (teamName) counts[teamName] = (counts[teamName] || 0) + 1;
+                });
+                const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+                if (!ranked.length) return;
+                const [winnerName, winnerCount] = ranked[0];
+                const runnerUpCount = ranked[1]?.[1] || 0;
+                const isClearMatch = winnerCount > runnerUpCount && winnerCount / Math.max(teacherClasses.length, 1) > 0.5;
+                const matchingTeam = state.courseTeams.find(team => team.name.toLowerCase() === winnerName.toLowerCase());
+                if (isClearMatch && matchingTeam) {
+                    state.teacherCourseTeams[teacher.name] = matchingTeam.id;
+                    assignedCount++;
+                }
+            });
+            if (assignedCount) persistCourseTeamData();
+            return assignedCount;
+        }
+
+        function triggerDownload(content, filename, mimeType = 'text/csv;charset=utf-8;') {
+            const blob = new Blob([content], { type: mimeType });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+        }
+
+        function formatScheduleCell(cls) {
+            if (!cls) return 'PLANNING';
+            const lines = [cls.Course || 'Assigned'];
+            if (cls.Coteacher) lines.push('CTT', cls.Coteacher);
+            if (cls.Room && !String(cls.Room).toUpperCase().includes('TBD')) lines.push(cls.Room);
+            return lines.join('\n');
+        }
+
+        function exportRoomGrid() {
+            const header = ["Room", ...state.periods.map(p => `Period ${p}`)];
+            const rows = [header];
+
+            state.rooms.forEach(room => {
+                const row = [room];
+                state.periods.forEach(period => {
+                    const isBlocked = state.blockedSlots[`${period}-${room}`];
+                    if (isBlocked) {
+                        row.push("Blocked (In-Use Outside Dept)");
+                        return;
+                    }
+                    const classes = state.proposed.filter(c => c.Room === room && c.Period === period);
+                    if (classes.length === 0) {
+                        row.push("OPEN");
+                    } else {
+                        row.push(classes.map(c => `${c.Course} (${c.Teacher})`).join(" / "));
+                    }
+                });
+                rows.push(row);
+            });
+
+            triggerDownload(convertToCSV(rows), "room_schedule_export.csv");
+            logAction("Exported", "Downloaded room assignment schedule grid as a CSV file.");
+        }
+
+        function exportTeacherGrid() {
+            const teacherIdx = state.headers.findIndex(h => h.toLowerCase() === 'teacher');
+            if (teacherIdx === -1 || !state.headers.length) {
+                alert('The original CSV column layout is unavailable. Please open the source CSV or a saved project first.');
+                return;
+            }
+
+            const duplicateAssignments = [];
+            state.teachers.forEach(t => state.periods.forEach(period => {
+                const classes = state.proposed.filter(c => c.Teacher === t.name && c.Period === period);
+                if (classes.length > 1) duplicateAssignments.push(`${t.name} — Period ${period}`);
+            }));
+            if (duplicateAssignments.length) {
+                alert(`The schedule cannot be exported in the original one-cell-per-period format yet. Resolve these multiple assignments first:\n\n${duplicateAssignments.join('\n')}`);
+                return;
+            }
+
+            const rows = [state.headers];
+
+            state.teachers.forEach(t => {
+                const row = [...(t.rowData || [])];
+                while (row.length < state.headers.length) row.push('');
+                row[teacherIdx] = t.name;
+
+                state.periods.forEach(period => {
+                    const periodIdx = state.headers.indexOf(period);
+                    if (periodIdx === -1) return;
+                    const cls = state.proposed.find(c => c.Teacher === t.name && c.Period === period);
+                    row[periodIdx] = formatScheduleCell(cls);
+                });
+                rows.push(row.slice(0, state.headers.length));
+            });
+
+            const baseName = (state.fileName || 'teacher_schedule').replace(/\.(csv|json)$/i, '');
+            triggerDownload(convertToCSV(rows), `${baseName}_updated.csv`);
+            logAction("Exported", "Downloaded the updated teacher schedule using the original import-compatible CSV layout.");
+        }
+
+        function saveProjectFile() {
+            logAction('Project Saved', 'Saved the complete editable schedule project to a local project file.');
+            const savedState = {};
+            const fields = [
+                'fileName', 'dataLoaded', 'periods', 'rawRows', 'headers', 'flattened',
+                'rooms', 'teachers', 'view', 'listTab', 'sort', 'proposed', 'blockedSlots',
+                'preferences', 'courseTeams', 'teacherCourseTeams', 'selectedTeacherForPrefs',
+                'commonPrepPeriod', 'commonPrepTeamFilter', 'useSuperOptimizer', 'globalPeriodRulesText',
+                'globalRoomRulesText', 'changeLog'
+            ];
+            fields.forEach(field => savedState[field] = state[field]);
+            const project = {
+                format: 'SchoolScheduleOptimizerProject',
+                version: 1,
+                savedAt: new Date().toISOString(),
+                state: savedState
+            };
+            const baseName = (state.fileName || 'school_schedule').replace(/\.(csv|json)$/i, '');
+            triggerDownload(JSON.stringify(project, null, 2), `${baseName}.schedule.json`, 'application/json;charset=utf-8;');
+        }
+
+        function handleProjectUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (loadEvent) => {
+                try {
+                    const project = JSON.parse(loadEvent.target.result);
+                    if (project.format !== 'SchoolScheduleOptimizerProject' || !project.state) {
+                        throw new Error('This is not a School Schedule Optimizer project file.');
+                    }
+                    if (!Array.isArray(project.state.headers) || !Array.isArray(project.state.proposed) || !Array.isArray(project.state.teachers)) {
+                        throw new Error('The project file is missing required schedule data.');
+                    }
+
+                    const fields = [
+                        'fileName', 'dataLoaded', 'periods', 'rawRows', 'headers', 'flattened',
+                        'rooms', 'teachers', 'view', 'listTab', 'sort', 'proposed', 'blockedSlots',
+                        'preferences', 'courseTeams', 'teacherCourseTeams', 'selectedTeacherForPrefs',
+                        'commonPrepPeriod', 'commonPrepTeamFilter', 'useSuperOptimizer', 'globalPeriodRulesText',
+                        'globalRoomRulesText', 'changeLog'
+                    ];
+                    fields.forEach(field => {
+                        if (Object.prototype.hasOwnProperty.call(project.state, field)) {
+                            state[field] = JSON.parse(JSON.stringify(project.state[field]));
+                        }
+                    });
+                    state.courseTeams = Array.isArray(state.courseTeams) ? state.courseTeams : [];
+                    state.teacherCourseTeams = state.teacherCourseTeams || {};
+                    state.preferences = state.preferences || {};
+                    state.blockedSlots = state.blockedSlots || {};
+                    state.dataLoaded = true;
+                    state.errorMsg = '';
+                    state.suggestions = [];
+                    persistCourseTeamData();
+                    updateConflicts(state.proposed);
+                    updateMetrics();
+                    generateSuggestions();
+                    logAction('Project Opened', `Reopened saved project ${file.name}.`);
+                    render();
+                } catch (err) {
+                    state.errorMsg = `Could not open project: ${err.message}`;
+                    render();
+                } finally {
+                    event.target.value = '';
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function handleUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            state.fileName = file.name;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                processData(e.target.result);
+                render();
+            };
+            reader.readAsText(file);
+        }
+
+        function toggleBlockSlot(period, room) {
+            const key = `${period}-${room}`;
+            state.blockedSlots[key] = !state.blockedSlots[key];
+            updateConflicts(state.proposed);
+            updateMetrics();
+            generateSuggestions();
+            logAction(state.blockedSlots[key] ? "Blocked Room" : "Unblocked Room", `Flagged Room ${room} during Period ${period} as ${state.blockedSlots[key] ? 'Unavailable / Blocked externally' : 'Available for scheduling'}`);
+            render();
+        }
+
+        function setView(viewName) { state.view = viewName; render(); }
+        function setListTab(tabName) { state.listTab = tabName; render(); }
+        function setCommonPrepPeriod(period) { state.commonPrepPeriod = period; render(); }
+        function setCommonPrepTeamFilter(teamId) { state.commonPrepTeamFilter = teamId; render(); }
+        
+        function handleSort(key) {
+            if (state.sort.key === key) state.sort.dir = state.sort.dir === 'asc' ? 'desc' : 'asc';
+            else { state.sort.key = key; state.sort.dir = 'asc'; }
+            render();
+        }
+
+        function selectTeacherForPrefs(teacherName) { state.selectedTeacherForPrefs = teacherName; render(); }
+
+        function savePreferences() {
+            const roomsInput = document.getElementById('pref-rooms').value;
+            const prepCheckboxes = document.querySelectorAll('.pref-prep:checked');
+            const max3Check = document.getElementById('pref-max3').checked;
+            const globalRules = document.getElementById('global-rules-text').value;
+            const globalRoomRules = document.getElementById('global-room-rules-text').value;
+            const courseTeamId = document.getElementById('pref-course-team')?.value || '';
+
+            const rooms = roomsInput.split(',').map(s => s.trim()).filter(s => s);
+            const preps = Array.from(prepCheckboxes).map(cb => cb.value);
+
+            state.globalPeriodRulesText = globalRules;
+            state.globalRoomRulesText = globalRoomRules;
+
+            if (state.selectedTeacherForPrefs) {
+                state.preferences[state.selectedTeacherForPrefs] = { rooms, preps, max3: max3Check };
+                if (courseTeamId) state.teacherCourseTeams[state.selectedTeacherForPrefs] = courseTeamId;
+                else delete state.teacherCourseTeams[state.selectedTeacherForPrefs];
+                persistCourseTeamData();
+                generateSuggestions(); 
+                logAction("Preferences Changed", `Saved specialized preferences and global constraints for ${state.selectedTeacherForPrefs}.`);
+                
+                const btn = document.getElementById('save-prefs-btn');
+                const originalText = btn.innerHTML;
+                btn.innerHTML = `<svg class="w-4 h-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> Saved!`;
+                btn.classList.add('bg-emerald-600', 'hover:bg-emerald-700');
+                btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+                
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.classList.remove('bg-emerald-600', 'hover:bg-emerald-700');
+                    btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                }, 1500);
+            }
+        }
+
+        function addCourseTeam() {
+            const nameInput = document.getElementById('new-team-name');
+            const colorInput = document.getElementById('new-team-color');
+            const name = nameInput?.value.trim();
+            if (!name) {
+                alert('Enter a course team name first.');
+                return;
+            }
+            if (state.courseTeams.some(team => team.name.toLowerCase() === name.toLowerCase())) {
+                alert('A course team with that name already exists.');
+                return;
+            }
+            const id = `team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            state.courseTeams.push({ id, name, color: normalizeTeamColor(colorInput?.value) });
+            persistCourseTeamData();
+            logAction('Course Team Added', `Added the ${name} course team.`);
+            render();
+        }
+
+        function autoSaveTeacherCourseTeam(teamId) {
+            const teacherName = state.selectedTeacherForPrefs;
+            if (!teacherName) return;
+            const previousTeam = getTeacherCourseTeam(teacherName);
+            if (teamId) state.teacherCourseTeams[teacherName] = teamId;
+            else delete state.teacherCourseTeams[teacherName];
+            persistCourseTeamData();
+            const nextTeam = getTeacherCourseTeam(teacherName);
+            logAction('Course Team Assignment', `Assigned ${teacherName} to ${nextTeam?.name || 'Unassigned'}${previousTeam ? ` (previously ${previousTeam.name})` : ''}.`);
+            const status = document.getElementById('team-autosave-status');
+            if (status) {
+                status.textContent = 'Saved automatically';
+                status.className = 'text-[10px] text-emerald-600 font-semibold mt-1';
+            }
+        }
+
+        function updateCourseTeam(teamId) {
+            const team = getCourseTeam(teamId);
+            const nameInput = document.getElementById(`team-name-${teamId}`);
+            const colorInput = document.getElementById(`team-color-${teamId}`);
+            if (!team || !nameInput) return;
+            const newName = nameInput.value.trim();
+            if (!newName) {
+                alert('Course team names cannot be blank.');
+                return;
+            }
+            if (state.courseTeams.some(other => other.id !== teamId && other.name.toLowerCase() === newName.toLowerCase())) {
+                alert('A course team with that name already exists.');
+                return;
+            }
+            const oldName = team.name;
+            team.name = newName;
+            team.color = normalizeTeamColor(colorInput?.value);
+            persistCourseTeamData();
+            logAction('Course Team Updated', `Updated course team ${oldName} to ${newName}.`);
+            render();
+        }
+
+        function deleteCourseTeam(teamId) {
+            const team = getCourseTeam(teamId);
+            if (!team || !confirm(`Delete the ${team.name} course team? Teachers assigned to it will become unassigned.`)) return;
+            state.courseTeams = state.courseTeams.filter(item => item.id !== teamId);
+            if (state.commonPrepTeamFilter === teamId) state.commonPrepTeamFilter = 'all';
+            Object.keys(state.teacherCourseTeams).forEach(teacherName => {
+                if (state.teacherCourseTeams[teacherName] === teamId) delete state.teacherCourseTeams[teacherName];
+            });
+            persistCourseTeamData();
+            logAction('Course Team Deleted', `Deleted the ${team.name} course team.`);
+            render();
+        }
+
+        function getHeaderHTML() {
+            const conflictCount = state.proposed.filter(d => d.isConflict).length;
+            const uniqueConflicts = new Set(state.proposed.filter(d => d.isConflict).map(d => `${d.Period}-${d.Room}`)).size;
+            
+            const fileBadge = state.fileName 
+                ? `<span class="bg-indigo-50 border border-indigo-100 text-indigo-700 text-[11px] font-medium px-2.5 py-1 rounded-md max-w-[210px] truncate" title="${state.fileName}">📁 ${state.fileName}</span>`
+                : `<span class="bg-slate-100 border border-slate-200 text-slate-400 text-[11px] italic px-2.5 py-1 rounded-md">No CSV Loaded</span>`;
+
+            const conflictsBadge = uniqueConflicts > 0
+                ? `<span class="bg-red-50 border border-red-200 text-red-700 text-[11px] font-bold px-2.5 py-1 rounded-md animate-pulse">⚠️ ${uniqueConflicts} Overlaps</span>`
+                : `<span class="bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold px-2.5 py-1 rounded-md">✅ Room Overlaps: 0</span>`;
+
+            const classesBadge = `<span class="bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-semibold px-2.5 py-1 rounded-md">Classes: ${state.flattened.length}</span>`;
+
+            return `
+                <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white px-4 py-2.5 rounded-lg shadow-sm border border-slate-200 shrink-0">
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+                        <div>
+                            <h1 class="text-base font-bold text-slate-900 flex items-center gap-1.5">
+                                <svg class="text-blue-600 w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                                Science Dept. Schedule Analyzer
+                            </h1>
+                        </div>
+                        <!-- Consolidated Metrics in Header Bar -->
+                        <div class="flex items-center gap-2 flex-wrap">
+                            ${fileBadge}
+                            ${classesBadge}
+                            ${conflictsBadge}
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-1.5 flex-wrap justify-end">
+                        <button onclick="exportRoomGrid()" class="bg-slate-800 hover:bg-slate-700 text-white px-2.5 py-1.5 rounded-md text-[11px] font-semibold flex items-center gap-1 shadow-sm transition-colors">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Export Room Schedule
+                        </button>
+                        <button onclick="exportTeacherGrid()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1.5 rounded-md text-[11px] font-semibold flex items-center gap-1 shadow-sm transition-colors">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Export Updated CSV
+                        </button>
+                        <button onclick="saveProjectFile()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-md text-[11px] font-semibold flex items-center gap-1 shadow-sm transition-colors" title="Save the complete editable schedule project">
+                            Save Project
+                        </button>
+                        <label class="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors text-[11px] font-semibold flex items-center gap-1 shadow-sm">
+                            Open Project
+                            <input type="file" accept=".json,.schedule.json,application/json" class="hidden project-upload-input" />
+                        </label>
+                        <label class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors text-[11px] font-semibold flex items-center gap-1">
+                            <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                            Upload CSV
+                            <input type="file" accept=".csv" class="hidden file-upload-input" />
+                        </label>
+                    </div>
+                </div>
+            `;
+        }
+
+        function getViewsHTML() {
+            const views = [
+                { id: 'list', name: 'List & Conflicts' },
+                { id: 'room', name: 'Room Grid' },
+                { id: 'teacher', name: 'Teacher Grid' },
+                { id: 'common-prep', name: 'Common Planning' },
+                { id: 'preferences', name: '⚙️ Preferences' },
+                { id: 'suggestions', name: '💡 Metrics & Optimizations' },
+                { id: 'changelog', name: '📋 Change Log' }
+            ];
+
+            const tabsHTML = views.map(v => `
+                <button data-view="${v.id}" class="view-btn px-3.5 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${state.view === v.id ? 'border-blue-600 text-blue-700 bg-blue-50/50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}">
+                    ${v.name}
+                    ${v.id === 'changelog' && state.changeLog.length > 0 ? `<span class="ml-1 bg-slate-200 text-slate-700 text-[10px] px-1.5 py-0.5 rounded-full">${state.changeLog.length}</span>` : ''}
+                </button>
+            `).join('');
+
+            let contentHTML = '';
+            if (state.view === 'list') contentHTML = getListViewHTML();
+            else if (state.view === 'room') contentHTML = getRoomViewHTML();
+            else if (state.view === 'teacher') contentHTML = getTeacherViewHTML();
+            else if (state.view === 'common-prep') contentHTML = getCommonPrepViewHTML();
+            else if (state.view === 'preferences') contentHTML = getPreferencesViewHTML();
+            else if (state.view === 'suggestions') contentHTML = getSuggestionsViewHTML();
+            else if (state.view === 'changelog') contentHTML = getChangeLogViewHTML();
+
+            return `
+                <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col flex-1 min-h-0">
+                    <div class="flex border-b border-slate-200 overflow-x-auto scrollbar-hide shrink-0 bg-slate-50/50">
+                        ${tabsHTML}
+                    </div>
+                    <div class="flex-1 bg-white p-0 overflow-hidden flex flex-col min-h-0">
+                        ${contentHTML}
+                    </div>
+                </div>
+            `;
+        }
+
+        function getPreferencesViewHTML() {
+            const teacherListHTML = state.teachers.map(t => `
+                <button data-teacher="${t.name}" class="teacher-sel-btn w-full text-left px-4 py-2 border-b border-slate-100 transition-colors text-xs font-semibold ${state.selectedTeacherForPrefs === t.name ? 'bg-blue-50 text-blue-700 border-l-4 border-l-blue-600' : 'text-slate-600 hover:bg-slate-50 border-l-4 border-l-transparent'}">
+                    ${t.name}
+                </button>
+            `).join('');
+
+            const teamManagerRows = state.courseTeams.map(team => `
+                <div class="grid grid-cols-[32px_1fr_auto_auto] items-center gap-2 p-2 border border-slate-200 rounded-md bg-white">
+                    <input id="team-color-${team.id}" type="color" value="${normalizeTeamColor(team.color)}" class="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5" aria-label="${escapeHTML(team.name)} color">
+                    <input id="team-name-${team.id}" type="text" value="${escapeHTML(team.name)}" class="min-w-0 px-2 py-1.5 text-xs border border-slate-300 rounded outline-none focus:ring-1 focus:ring-blue-500" aria-label="Course team name">
+                    <button onclick="updateCourseTeam('${team.id}')" class="px-2.5 py-1.5 rounded text-[10px] font-bold bg-slate-800 text-white hover:bg-slate-700">Save</button>
+                    <button onclick="deleteCourseTeam('${team.id}')" class="px-2.5 py-1.5 rounded text-[10px] font-bold border border-red-200 text-red-700 hover:bg-red-50">Delete</button>
+                </div>
+            `).join('');
+
+            const teamManagerHTML = `
+                <div class="pt-4 border-t border-slate-200">
+                    <h3 class="text-xs font-bold text-slate-900">Course Teams</h3>
+                    <p class="text-[10px] text-slate-500 mt-0.5 mb-2">Add, rename, recolor, or delete the teams shown in Common Planning.</p>
+                    <div class="space-y-2">${teamManagerRows || '<p class="text-xs text-slate-400 italic">No course teams created yet.</p>'}</div>
+                    <div class="grid grid-cols-[32px_1fr_auto] items-center gap-2 mt-2 p-2 border border-dashed border-slate-300 rounded-md bg-slate-50">
+                        <input id="new-team-color" type="color" value="#475569" class="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5" aria-label="New course team color">
+                        <input id="new-team-name" type="text" placeholder="New course team name" class="min-w-0 px-2 py-1.5 text-xs border border-slate-300 rounded outline-none focus:ring-1 focus:ring-blue-500">
+                        <button onclick="addCourseTeam()" class="px-3 py-1.5 rounded text-[10px] font-bold bg-blue-600 text-white hover:bg-blue-700">Add Team</button>
+                    </div>
+                </div>`;
+
+            let prefsFormHTML = '';
+            if (state.selectedTeacherForPrefs) {
+                const prefs = state.preferences[state.selectedTeacherForPrefs] || { rooms: [], preps: [], max3: true };
+                const assignedTeamId = state.teacherCourseTeams[state.selectedTeacherForPrefs] || '';
+                const courseTeamOptions = state.courseTeams.map(team => `<option value="${team.id}" ${assignedTeamId === team.id ? 'selected' : ''}>${escapeHTML(team.name)}</option>`).join('');
+                
+                const prepCheckboxes = state.periods.map(p => `
+                    <label class="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded cursor-pointer hover:bg-slate-50 transition-colors">
+                        <input type="checkbox" value="${p}" class="pref-prep w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500" ${prefs.preps.includes(p) ? 'checked' : ''}>
+                        <span class="text-xs font-medium text-slate-700">Period ${p}</span>
+                    </label>
+                `).join('');
+
+                prefsFormHTML = `
+                    <div class="p-4 overflow-y-auto h-full space-y-4">
+                        <h2 class="text-sm font-bold text-slate-900 border-b border-slate-200 pb-2">
+                            Preferences for <span class="text-blue-600">${state.selectedTeacherForPrefs}</span>
+                        </h2>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-bold text-slate-700 mb-1">Preferred Planning Periods</label>
+                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                    ${prepCheckboxes}
+                                </div>
+                            </div>
+
+                            <div class="pt-3 border-t border-slate-100">
+                                <label for="pref-course-team" class="block text-xs font-bold text-slate-700 mb-1">Course Team</label>
+                                <select id="pref-course-team" onchange="autoSaveTeacherCourseTeam(this.value)" class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded bg-white focus:ring-1 focus:ring-blue-500 outline-none">
+                                    <option value="">Unassigned</option>
+                                    ${courseTeamOptions}
+                                </select>
+                                <p id="team-autosave-status" class="text-[10px] text-slate-500 mt-1">Changes save automatically and are used in Common Planning.</p>
+                            </div>
+
+                            <div class="pt-3 border-t border-slate-100">
+                                <label class="block text-xs font-bold text-slate-700 mb-1">Preferred Classrooms</label>
+                                <input type="text" id="pref-rooms" value="${prefs.rooms.join(', ')}" placeholder="e.g. 409, 312" class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 outline-none transition-shadow text-slate-700">
+                            </div>
+                            
+                            <div class="pt-3 border-t border-slate-100">
+                                <label class="flex items-center gap-1.5 cursor-pointer p-1.5 border border-slate-200 rounded hover:bg-slate-50 transition-colors inline-flex">
+                                    <input type="checkbox" id="pref-max3" class="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500" ${prefs.max3 !== false ? 'checked' : ''}>
+                                    <span class="text-xs font-medium text-slate-700">Strict: Max 3 consecutive classes</span>
+                                </label>
+                            </div>
+
+                            <div class="pt-4 border-t border-slate-200">
+                                <h3 class="text-xs font-bold text-slate-900 mb-2 flex items-center gap-1 text-indigo-600">
+                                    Global Course Constraints
+                                </h3>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-[11px] font-semibold text-slate-700 mb-1">Period Constraints (e.g. Course: 1, 2)</label>
+                                        <textarea id="global-rules-text" rows="3" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 outline-none text-slate-700 font-mono text-xs leading-tight">${state.globalPeriodRulesText || ''}</textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[11px] font-semibold text-slate-700 mb-1">Room Constraints (e.g. Course: 215, 216)</label>
+                                        <textarea id="global-room-rules-text" rows="3" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 outline-none text-slate-700 font-mono text-xs leading-tight">${state.globalRoomRulesText || ''}</textarea>
+                                    </div>
+                                </div>
+                            </div>
+
+                            ${teamManagerHTML}
+
+                            <div class="pt-3 border-t border-slate-100">
+                                <button id="save-prefs-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-xs font-semibold transition-colors shadow-sm flex items-center gap-1">
+                                    Save Preferences
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="flex flex-col md:flex-row h-full min-h-0 flex-grow">
+                    <div class="w-full md:w-1/4 border-r border-slate-200 bg-white overflow-y-auto">
+                        <div class="p-2 bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider sticky top-0 z-10">Roster (Alphabetical)</div>
+                        <div class="divide-y divide-slate-100 max-h-[35vh] md:max-h-[60vh] overflow-y-auto table-container">
+                            ${teacherListHTML}
+                        </div>
+                    </div>
+                    <div class="w-full md:w-3/4 bg-white overflow-y-auto">
+                        ${prefsFormHTML}
+                    </div>
+                </div>
+            `;
+        }
+
+        function normalizeTeacherName(value) {
+            return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        }
+
+        function teacherIsAssignedToClass(teacherName, cls) {
+            const target = normalizeTeacherName(teacherName);
+            const primary = normalizeTeacherName(cls.Teacher);
+            const coteacher = normalizeTeacherName(cls.Coteacher);
+            if (primary === target || coteacher === target) return true;
+
+            // Recognize cells that list more than one co-teacher.
+            return target.length >= 3 && coteacher.includes(target);
+        }
+
+        function getTeacherAssignments(teacherName, period) {
+            return state.proposed.filter(cls => cls.Period === period && teacherIsAssignedToClass(teacherName, cls));
+        }
+
+        function getPlanningTeachersForPeriod(period) {
+            return state.teachers.filter(teacher => getTeacherAssignments(teacher.name, period).length === 0);
+        }
+
+        function getCommonPrepViewHTML() {
+            const selectedPeriods = state.commonPrepPeriod === 'all' ? state.periods : [state.commonPrepPeriod];
+            const activeTeamFilter = state.commonPrepTeamFilter === '__unassigned__' || state.courseTeams.some(team => team.id === state.commonPrepTeamFilter)
+                ? state.commonPrepTeamFilter
+                : 'all';
+            const filteredTeachers = state.teachers.filter(teacher => {
+                if (activeTeamFilter === 'all') return true;
+                if (activeTeamFilter === '__unassigned__') return !getTeacherCourseTeam(teacher.name);
+                return state.teacherCourseTeams[teacher.name] === activeTeamFilter;
+            });
+            const filteredTeacherNames = new Set(filteredTeachers.map(teacher => teacher.name));
+            const teamFilterOptions = state.courseTeams.map(team => `<option value="${team.id}" ${activeTeamFilter === team.id ? 'selected' : ''}>${escapeHTML(team.name)}</option>`).join('');
+            const teamFilterControl = `<label class="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+                Course team
+                <select onchange="setCommonPrepTeamFilter(this.value)" class="px-2.5 py-1.5 rounded-md border border-slate-300 bg-white text-slate-700 outline-none focus:ring-1 focus:ring-blue-500">
+                    <option value="all" ${activeTeamFilter === 'all' ? 'selected' : ''}>All course teams</option>
+                    ${teamFilterOptions}
+                    <option value="__unassigned__" ${activeTeamFilter === '__unassigned__' ? 'selected' : ''}>Unassigned</option>
+                </select>
+            </label>`;
+            const periodButtons = ['all', ...state.periods].map(period => {
+                const label = period === 'all' ? 'All periods' : `Period ${period}`;
+                const active = state.commonPrepPeriod === period;
+                return `<button onclick="setCommonPrepPeriod('${period}')" class="px-3 py-1.5 rounded-md text-[11px] font-semibold border transition-colors ${active ? 'bg-blue-600 border-blue-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}">${label}</button>`;
+            }).join('');
+
+            const summaryCards = selectedPeriods.map(period => {
+                const planningTeachers = getPlanningTeachersForPeriod(period).filter(teacher => filteredTeacherNames.has(teacher.name));
+                const teacherChips = planningTeachers.map(t => {
+                    const team = getTeacherCourseTeam(t.name);
+                    const teamColor = normalizeTeamColor(team?.color);
+                    return `<span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-semibold text-slate-800" style="background:${teamColor}18;border-color:${teamColor}66">
+                        <span class="w-2 h-2 rounded-full shrink-0" style="background:${teamColor}"></span>
+                        ${escapeHTML(t.name)}
+                        <span class="text-[9px] uppercase tracking-wide opacity-65">${team ? escapeHTML(team.name) : 'Unassigned'}</span>
+                    </span>`;
+                }).join('');
+
+                return `<section class="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+                    <div class="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b border-slate-200">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-sm">Period ${period}</h3>
+                            <p class="text-[10px] text-slate-500 mt-0.5">Teachers sharing this planning period</p>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="text-xl font-bold text-blue-700">${planningTeachers.length}</div>
+                            <div class="text-[9px] uppercase tracking-wide text-slate-500">planning</div>
+                        </div>
+                    </div>
+                    <div class="p-3 flex flex-wrap gap-1.5 min-h-[54px]">
+                        ${teacherChips || '<span class="text-xs text-slate-400 italic">No teachers have planning this period.</span>'}
+                    </div>
+                </section>`;
+            }).join('');
+
+            const teamMeetingHeaders = selectedPeriods.map(period => `<th class="px-3 py-2 min-w-[100px] text-center border-l border-slate-200">P${period}</th>`).join('');
+            const visibleTeams = activeTeamFilter === 'all'
+                ? state.courseTeams
+                : state.courseTeams.filter(team => team.id === activeTeamFilter);
+            const teamMeetingRows = visibleTeams.map(team => {
+                const members = state.teachers.filter(teacher => state.teacherCourseTeams[teacher.name] === team.id);
+                const teamColor = normalizeTeamColor(team.color);
+                const periodCells = selectedPeriods.map(period => {
+                    const planningCount = members.filter(teacher => getTeacherAssignments(teacher.name, period).length === 0).length;
+                    const canMeet = members.length > 0 && planningCount === members.length;
+                    if (!members.length) return `<td class="px-3 py-2 text-center border-l border-slate-100 text-slate-300">—</td>`;
+                    return `<td class="px-3 py-2 text-center border-l border-slate-100 ${canMeet ? 'bg-emerald-50' : 'bg-slate-50'}">
+                        <span class="inline-flex items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-bold ${canMeet ? 'text-emerald-800 bg-emerald-100 border border-emerald-200' : 'text-slate-600'}">
+                            ${canMeet ? 'CAN MEET' : `${planningCount}/${members.length} planning`}
+                        </span>
+                    </td>`;
+                }).join('');
+                return `<tr class="border-b border-slate-100">
+                    <td class="sticky-col px-3 py-2 bg-white">
+                        <div class="flex items-center gap-2">
+                            <span class="w-3 h-3 rounded-full shrink-0" style="background:${teamColor}"></span>
+                            <div><div class="font-bold text-xs text-slate-800">${escapeHTML(team.name)}</div><div class="text-[9px] text-slate-500">${members.length} member${members.length === 1 ? '' : 's'}</div></div>
+                        </div>
+                    </td>${periodCells}
+                </tr>`;
+            }).join('');
+
+            const teamMeetingTable = `<section class="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div class="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
+                    <h3 class="font-bold text-slate-900 text-xs">Course team meeting opportunities</h3>
+                    <p class="text-[10px] text-slate-500">CAN MEET means every assigned member of that team has PLANNING during the period.</p>
+                </div>
+                <div class="table-container overflow-x-auto">
+                    <table class="w-full text-left text-xs text-slate-600 border-collapse">
+                        <thead class="bg-slate-50 text-slate-700 text-[10px] uppercase font-semibold border-b border-slate-300">
+                            <tr><th class="sticky-col px-3 py-2 min-w-[165px] z-40">Course Team</th>${teamMeetingHeaders}</tr>
+                        </thead>
+                        <tbody>${teamMeetingRows || '<tr><td class="p-4 text-slate-400 italic">Create course teams in Preferences to see meeting opportunities.</td></tr>'}</tbody>
+                    </table>
+                </div>
+            </section>`;
+
+            const matrixHeaders = state.periods.map(period => `<th class="px-2 py-2 min-w-[105px] text-center border-l border-slate-200">P${period}</th>`).join('');
+            const matrixRows = filteredTeachers.map(teacher => {
+                const teacherTeam = getTeacherCourseTeam(teacher.name);
+                const teacherTeamColor = normalizeTeamColor(teacherTeam?.color);
+                const cells = state.periods.map(period => {
+                    const assignments = getTeacherAssignments(teacher.name, period);
+                    if (assignments.length === 0) {
+                        return `<td class="px-2 py-2 text-center border-l border-slate-100" style="background:${teacherTeamColor}14">
+                            <span class="font-bold text-[10px]" style="color:${teacherTeamColor}">PLANNING</span>
+                        </td>`;
+                    }
+                    const courseNames = assignments.map(cls => cls.Course || 'Assigned').join(' / ');
+                    const isCoteaching = assignments.some(cls => normalizeTeacherName(cls.Teacher) !== normalizeTeacherName(teacher.name));
+                    return `<td class="px-2 py-2 text-center border-l border-slate-100 bg-slate-50 text-slate-500" title="${courseNames}">
+                        <div class="text-[10px] font-semibold truncate max-w-[120px] mx-auto">${courseNames}</div>
+                        ${isCoteaching ? '<div class="text-[9px] text-indigo-600 font-bold mt-0.5">CO-TEACHING</div>' : ''}
+                    </td>`;
+                }).join('');
+                return `<tr class="border-b border-slate-100 hover:bg-slate-50/50">
+                    <td class="sticky-col px-3 py-2 font-bold text-xs text-slate-800 bg-white">
+                        <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${teacherTeamColor}"></span><div><div class="max-w-[150px] truncate" title="${escapeHTML(teacher.name)}">${escapeHTML(teacher.name)}</div><div class="text-[9px] font-medium text-slate-400">${teacherTeam ? escapeHTML(teacherTeam.name) : 'Unassigned'}</div></div></div>
+                    </td>
+                    ${cells}
+                </tr>`;
+            }).join('');
+
+            return `<div class="flex flex-col h-full min-h-0 bg-slate-50/30">
+                <div class="px-4 py-3 border-b border-slate-200 bg-white shrink-0">
+                    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div>
+                            <h2 class="font-bold text-slate-900 text-sm">Teacher Planning Periods</h2>
+                            <p class="text-[11px] text-slate-500 mt-0.5">A period is labeled PLANNING when the teacher has no class assignment as either the primary teacher or co-teacher. Team filters include busy members in the matrix so partial meeting availability remains visible.</p>
+                        </div>
+                        <div class="flex flex-col items-start lg:items-end gap-2">
+                            ${teamFilterControl}
+                            <div class="flex flex-wrap gap-1.5" aria-label="Filter common planning periods">${periodButtons}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-container overflow-y-auto flex-1 min-h-0 p-3 space-y-3">
+                    ${activeTeamFilter === '__unassigned__' ? '' : teamMeetingTable}
+                    <div class="grid grid-cols-1 ${selectedPeriods.length > 1 ? 'md:grid-cols-2 xl:grid-cols-4' : ''} gap-3">${summaryCards}</div>
+                    ${state.commonPrepPeriod === 'all' ? `<section class="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+                        <div class="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
+                            <h3 class="font-bold text-slate-900 text-xs">At-a-glance availability matrix</h3>
+                            <p class="text-[10px] text-slate-500">Use this view to spot overlapping planning time across the full department.</p>
+                        </div>
+                        <div class="table-container overflow-x-auto">
+                            <table class="w-full text-left text-xs text-slate-600 border-collapse">
+                                <thead class="bg-slate-50 text-slate-700 text-[10px] uppercase font-semibold border-b border-slate-300">
+                                    <tr><th class="sticky-col px-3 py-2 min-w-[150px] z-40">Teacher</th>${matrixHeaders}</tr>
+                                </thead>
+                                <tbody>${matrixRows || '<tr><td colspan="9" class="p-6 text-center text-slate-400 italic">No teachers match this course team filter.</td></tr>'}</tbody>
+                            </table>
+                        </div>
+                    </section>` : ''}
+                </div>
+            </div>`;
+        }
+
+        function getListViewHTML() {
+            let sortedData = [...state.proposed]; 
+            sortedData.sort((a, b) => {
+                let aVal = a[state.sort.key];
+                let bVal = b[state.sort.key];
+                
+                if (state.sort.key === 'Period' || state.sort.key === 'Room') {
+                    const aNum = parseInt(aVal), bNum = parseInt(bVal);
+                    if (!isNaN(aNum) && !isNaN(bNum)) { aVal = aNum; bVal = bNum; }
+                }
+
+                if (aVal < bVal) return state.sort.dir === 'asc' ? -1 : 1;
+                if (aVal > bVal) return state.sort.dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            if (state.listTab === 'conflicts') {
+                sortedData = sortedData.filter(d => d.isConflict);
+            }
+
+            const headers = ['Period', 'Teacher', 'Course', 'Room', 'Coteacher'];
+            const headerHTML = headers.map(h => `
+                <th data-sort="${h}" class="sort-header px-4 py-2 cursor-pointer hover:bg-slate-100 transition-colors group select-none">
+                    <div class="flex items-center gap-1">
+                        ${h}
+                        <svg class="w-3 h-3 ${state.sort.key === h ? 'text-blue-600' : 'text-slate-300 group-hover:text-slate-505'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 15 12 20 17 15"></polyline><polyline points="7 9 12 4 17 9"></polyline></svg>
+                    </div>
+                </th>
+            `).join('');
+
+            const rowsHTML = sortedData.map(row => `
+                <tr class="hover:bg-slate-50 border-b border-slate-100 transition-colors ${row.isConflict ? 'bg-red-50/40' : ''}">
+                    <td class="px-4 py-2 font-semibold text-slate-900">${row.Period}</td>
+                    <td class="px-4 py-2 text-xs">${row.Teacher}</td>
+                    <td class="px-4 py-2"><span class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200 text-[11px] font-medium">${row.Course}</span></td>
+                    <td class="px-4 py-2 text-xs font-bold ${row.isConflict ? 'text-red-700' : 'text-slate-700'}">${row.Room || '-'}</td>
+                    <td class="px-4 py-2 text-xs text-slate-500">${row.Coteacher || '-'}</td>
+                    <td class="px-4 py-2 text-center text-xs">
+                        ${row.isConflict 
+                            ? `<span class="inline-flex items-center gap-0.5 text-red-700 bg-red-100 px-1.5 py-0.5 rounded text-[10px] font-bold border border-red-200">Overlap</span>` 
+                            : `<span class="inline-flex items-center gap-0.5 text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200">Clear</span>`
+                        }
+                    </td>
+                </tr>
+            `).join('');
+
+            return `
+                <div class="flex flex-col sm:flex-row justify-between items-stretch sm:items-center border-b border-slate-100 bg-slate-50/50 pr-4 shrink-0">
+                    <div class="flex">
+                        <button data-list-tab="all" class="list-tab-btn px-4 py-2 text-xs font-semibold transition-colors ${state.listTab === 'all' ? 'text-blue-700 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-700'}" style="margin-bottom: -1px;">All Classes</button>
+                        <button data-list-tab="conflicts" class="list-tab-btn px-4 py-2 text-xs font-semibold transition-colors flex items-center gap-1.5 ${state.listTab === 'conflicts' ? 'text-red-700 border-b-2 border-red-600' : 'text-slate-500 hover:text-slate-700'}" style="margin-bottom: -1px;">
+                            Conflicts Only
+                        </button>
+                    </div>
+                    <div class="flex items-center gap-1 my-1 sm:my-0 justify-end">
+                        <button onclick="scrollTable('left')" class="p-1 bg-white border border-slate-200 rounded shadow-sm hover:bg-slate-50 text-slate-600 transition-colors" title="Scroll Left">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                        </button>
+                        <button onclick="scrollTable('right')" class="p-1 bg-white border border-slate-200 rounded shadow-sm hover:bg-slate-50 text-slate-600 transition-colors" title="Scroll Right">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container overflow-x-auto overflow-y-auto flex-1 min-h-0">
+                    <table class="w-full text-left text-xs text-slate-600 whitespace-nowrap">
+                        <thead class="bg-slate-50 text-slate-700 text-[10px] uppercase font-semibold border-b border-slate-200">
+                            <tr>${headerHTML}<th class="px-4 py-2 text-center sticky top-0 bg-slate-50">Status</th></tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100 bg-white">
+                            ${rowsHTML || `<tr><td colSpan="6" class="px-4 py-12 text-center text-slate-500 italic text-xs">No classes found for this view.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function getRoomViewHTML() {
+            const periodsHTML = state.periods.map(p => `<th class="px-3 py-2 min-w-[150px] text-center border-l border-slate-200">Period ${p}</th>`).join('');
+            
+            const rowsHTML = state.rooms.map(room => {
+                const cellsHTML = state.periods.map(period => {
+                    const blockKey = `${period}-${room}`;
+                    const isBlocked = state.blockedSlots[blockKey];
+
+                    if (isBlocked) {
+                        return `<td class="p-1 border-l border-slate-100 blocked-stripes text-center align-middle transition-colors relative group" style="height: 52px;">
+                            <button onclick="toggleBlockSlot('${period}', '${room}')" class="absolute inset-0 flex flex-col justify-center items-center text-red-900 bg-red-100/80 hover:bg-red-200/95 transition-all outline-none">
+                                <span class="text-[10px] font-bold leading-tight flex items-center gap-0.5">
+                                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0110 0v4"></path></svg>
+                                    EXTERNAL BLOCK
+                                </span>
+                                <span class="text-[9px] text-red-700 font-semibold opacity-0 group-hover:opacity-100 transition-opacity">Click to Unlock</span>
+                            </button>
+                        </td>`;
+                    }
+
+                    const classes = state.proposed.filter(d => d.Room === room && d.Period === period); 
+                    
+                    if (classes.length === 0) {
+                        return `<td class="dropzone-td p-1 border-l border-slate-100 bg-emerald-50/10 hover:bg-emerald-100/30 relative group text-center align-middle transition-colors cursor-pointer" style="height: 52px;" data-grid="room" data-period="${period}" data-room="${room}" onclick="if(event.target===this) toggleBlockSlot('${period}', '${room}')">
+                            <button onclick="toggleBlockSlot('${period}', '${room}')" class="text-[9px] font-bold text-emerald-600/50 hover:text-emerald-700 transition-colors hidden group-hover:inline-block border border-emerald-300 rounded px-1.5 py-0.5 bg-white shadow-sm">
+                                🔒 Block Room
+                            </button>
+                            <span class="text-[10px] font-semibold text-emerald-600/20 group-hover:hidden tracking-wider block">OPEN</span>
+                        </td>`;
+                    }
+                    
+                    const isConflict = classes.length > 1;
+                    const classBoxes = classes.map(c => `
+                        <div class="draggable-class p-1 rounded text-[10px] border ${isConflict ? 'bg-red-100 border-red-200 text-red-900 shadow-sm' : 'bg-white border-slate-200 shadow-sm'} hover:shadow transition-shadow" draggable="true" data-id="${c.id}">
+                            <div class="font-bold truncate pointer-events-none" title="${c.Course}">${c.Course}</div>
+                            <div class="text-slate-500 truncate mt-0.5 pointer-events-none text-[9px]">${c.Teacher}</div>
+                        </div>
+                    `).join('');
+                    
+                    return `<td class="dropzone-td p-1 border-l border-slate-100 align-top transition-colors ${isConflict ? 'bg-red-50/50' : ''}" data-grid="room" data-period="${period}" data-room="${room}">
+                        ${classBoxes}
+                    </td>`;
+                }).join('');
+
+                return `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50/30 transition-colors">
+                        <td class="sticky-col px-3 py-2 font-bold text-slate-800 text-center text-sm">${room}</td>
+                        ${cellsHTML}
+                    </tr>
+                `;
+            }).join('');
+
+            return `
+                <div class="p-2 bg-blue-50/50 border-b border-slate-100 text-xs text-slate-600 flex flex-col md:flex-row justify-between items-start md:items-center gap-2 shrink-0">
+                    <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5 text-blue-500 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                    Room Allocation. Click vacant spaces to toggle external blockades (In-Use).</span>
+                    <div class="flex items-center gap-2 justify-end w-full md:w-auto">
+                        <div class="flex items-center gap-1">
+                            <button onclick="scrollTable('left')" class="p-1 bg-white border border-slate-200 rounded shadow-sm hover:bg-slate-50 text-slate-600 transition-colors">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                            </button>
+                            <button onclick="scrollTable('right')" class="p-1 bg-white border border-slate-200 rounded shadow-sm hover:bg-slate-50 text-slate-600 transition-colors">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-container overflow-x-auto flex-1 overflow-y-auto min-h-0">
+                    <table class="w-full text-left text-xs text-slate-600 border-collapse">
+                        <thead class="bg-slate-50 text-slate-700 text-[10px] uppercase font-semibold border-b border-slate-300 shadow-sm">
+                            <tr>
+                                <th class="sticky-col px-3 py-1.5 min-w-[80px] text-center z-40">Room</th>
+                                ${periodsHTML}
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white">${rowsHTML}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function getTeacherViewHTML() {
+            const periodsHTML = state.periods.map(p => {
+                let usedRooms = state.proposed.filter(c => c.Period === p && c.Room).map(c => c.Room);
+                let freeRooms = state.rooms.filter(r => !usedRooms.includes(r) && !state.blockedSlots[`${p}-${r}`]);
+                
+                return `<th class="px-3 py-1.5 min-w-[155px] border-l border-slate-200 align-top">
+                    <div class="font-semibold text-xs mb-0.5 text-slate-700">Period ${p}</div>
+                    <div class="text-[9px] text-slate-500 font-normal leading-normal whitespace-normal max-h-10 overflow-y-auto bg-white/60 p-1 rounded border border-slate-100 shadow-inner">
+                        <span class="font-bold text-emerald-600">Open:</span> ${freeRooms.length > 0 ? freeRooms.join(', ') : 'None'}
+                    </div>
+                </th>`;
+            }).join('');
+            
+            const rowsHTML = state.teachers.map(t => {
+                const teacherClasses = state.proposed.filter(c => c.Teacher === t.name);
+                const uniqueRooms = [...new Set(teacherClasses.map(c => c.Room).filter(r => r))];
+                
+                // Badge showing all occupied classrooms for each teacher (as seen in image_4a282c.png)
+                const roomsBadgeHTML = uniqueRooms.length > 0 
+                    ? `<span class="inline-block mt-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap">Rooms: ${uniqueRooms.join(', ')}</span>`
+                    : `<span class="inline-block mt-1 bg-slate-100 text-slate-400 text-[9px] italic px-1.5 py-0.5 rounded-full">No Rooms</span>`;
+
+                const cellsHTML = state.periods.map(period => {
+                    const classes = state.proposed.filter(d => d.Teacher === t.name && d.Period === period); 
+                    
+                    if (classes.length === 0) {
+                        return `<td class="dropzone-td p-1.5 border-l border-slate-100 align-top transition-colors" data-grid="teacher" data-period="${period}" data-teacher="${t.name}">
+                            <div class="text-[10px] p-2.5 rounded border bg-slate-100 text-slate-500 border-dashed border-slate-300 flex items-center justify-center h-full min-h-[3rem] pointer-events-none">
+                                PLANNING
+                            </div>
+                        </td>`;
+                    }
+                    
+                    const classBoxes = classes.map(c => {
+                        const roomOptions = `<option value="">TBD</option>` + state.rooms.map(r => `<option value="${r}" ${r === c.Room ? 'selected' : ''}>${r}</option>`).join('');
+                        
+                        return `
+                        <div class="draggable-class text-[11px] p-1.5 rounded border bg-white border-slate-200 text-slate-800 shadow-sm mb-1 hover:shadow-md transition-shadow ${c.isConflict ? 'border-red-400 bg-red-50' : ''}" draggable="true" data-id="${c.id}">
+                            <div class="font-bold pointer-events-none truncate" title="${c.Course}">${c.Course}</div>
+                            <select class="room-selector mt-1 w-full bg-transparent text-indigo-600 font-bold border-b border-indigo-200 hover:border-indigo-400 focus:border-indigo-600 focus:outline-none cursor-pointer pb-0.5 text-[10px]" data-id="${c.id}">
+                                ${roomOptions}
+                            </select>
+                        </div>
+                        `;
+                    }).join('');
+
+                    return `<td class="dropzone-td p-1 border-l border-slate-100 align-top transition-colors" data-grid="teacher" data-period="${period}" data-teacher="${t.name}">
+                        ${classBoxes}
+                    </td>`;
+                }).join('');
+
+                return `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50/50 transition-colors">
+                        <td class="sticky-col px-3 py-2 font-bold text-slate-800 text-xs bg-white">
+                            <div class="truncate max-w-[140px]" title="${t.name}">${t.name}</div>
+                            ${roomsBadgeHTML}
+                        </td>
+                        ${cellsHTML}
+                    </tr>
+                `;
+            }).join('');
+
+            return `
+                <div class="p-2 bg-amber-50/50 border-b border-slate-100 text-xs text-slate-600 flex flex-col md:flex-row justify-between items-start md:items-center gap-2 shrink-0">
+                    <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5 text-amber-600 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                    Proposed Roster Matrix. Teachers are sorted alphabetically by last name. Drag classes to update.</span>
+                    <div class="flex items-center gap-1 justify-end shrink-0">
+                        <button onclick="scrollTable('left')" class="p-1 bg-white border border-slate-200 rounded shadow-sm hover:bg-slate-50 text-slate-600 transition-colors">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                        </button>
+                        <button onclick="scrollTable('right')" class="p-1 bg-white border border-slate-200 rounded shadow-sm hover:bg-slate-50 text-slate-600 transition-colors">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container overflow-x-auto flex-1 overflow-y-auto min-h-0">
+                    <table class="w-full text-left text-xs text-slate-600 border-collapse">
+                        <thead class="bg-slate-50 text-slate-700 text-[10px] uppercase font-semibold border-b border-slate-300 shadow-sm">
+                            <tr>
+                                <th class="sticky-col px-3 py-2 min-w-[130px] z-40 bg-slate-50">Teacher</th>
+                                ${periodsHTML}
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white">${rowsHTML}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function getSuggestionsViewHTML() {
+            const metricsRows = state.metrics.map(m => {
+                const roomDiff = m.propRooms - m.origRooms;
+                const transDiff = m.propTrans - m.origTrans;
+                
+                const roomHtml = roomDiff < 0 
+                    ? `<span class="line-through text-slate-400 mr-1">${m.origRooms}</span> <span class="text-emerald-600 font-bold">${m.propRooms}</span>` 
+                    : roomDiff > 0 ? `<span class="line-through text-slate-400 mr-1">${m.origRooms}</span> <span class="text-red-500 font-bold">${m.propRooms}</span>` : `<span class="font-medium text-slate-700">${m.origRooms}</span>`;
+                    
+                const transHtml = transDiff < 0 
+                    ? `<span class="line-through text-slate-400 mr-1">${m.origTrans}</span> <span class="text-emerald-600 font-bold">${m.propTrans}</span>` 
+                    : transDiff > 0 ? `<span class="line-through text-slate-400 mr-1">${m.origTrans}</span> <span class="text-red-500 font-bold">${m.propTrans}</span>` : `<span class="font-medium text-slate-700">${m.origTrans}</span>`;
+
+                return `
+                    <tr class="hover:bg-slate-50 border-b border-slate-100 transition-colors text-xs">
+                        <td class="px-4 py-1.5 font-medium text-slate-800">${m.teacher}</td>
+                        <td class="px-4 py-1.5 text-center">${roomHtml}</td>
+                        <td class="px-4 py-1.5 text-center">${transHtml}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            const metricsTableHTML = `
+                <div class="m-3 bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden shrink-0">
+                    <div class="p-3 bg-slate-50 border-b border-slate-200">
+                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-1">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-xs">Teacher Efficiency Metrics</h3>
+                            </div>
+                            
+                            <div class="flex flex-wrap gap-1">                                
+                                <button id="super-optimize-btn" class="${state.useSuperOptimizer ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-white border-slate-200 text-slate-600'} hover:bg-slate-50 border px-2 py-1 rounded font-semibold transition-colors text-[10px] flex items-center gap-1 whitespace-nowrap">
+                                    <svg class="w-3 h-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+                                    ${state.useSuperOptimizer ? 'Super Optimizer Engaged' : 'Run Super Optimizer'}
+                                </button>
+                                
+                                <button id="random-optimize-btn" class="bg-slate-800 hover:bg-slate-700 border-transparent border text-white px-2 py-1 rounded font-semibold transition-colors text-[10px] flex items-center gap-1 whitespace-nowrap">
+                                    Run Random Optimizer (Monte Carlo)
+                                </button>
+                                
+                                <button id="reset-schedule-btn" class="bg-white border-slate-200 hover:bg-slate-100 border text-slate-700 px-2 py-1 rounded font-semibold transition-colors text-[10px] flex items-center gap-1 whitespace-nowrap">
+                                    Reset Schedule
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="max-h-[120px] overflow-y-auto table-container">
+                        <table class="w-full text-[11px] text-slate-600">
+                            <thead class="bg-white text-slate-500 text-[9px] uppercase font-bold border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                    <th class="px-4 py-1 text-left">Teacher</th>
+                                    <th class="px-4 py-1 text-center">Unique Rooms Used</th>
+                                    <th class="px-4 py-1 text-center">Transitions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${metricsRows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+
+            let suggestionsContent = '';
+            if (state.suggestions.length === 0) {
+                const conflictsCount = state.proposed.filter(c => c.isConflict).length;
+                if (conflictsCount > 0) {
+                    suggestionsContent = `
+                        <div class="p-6 text-center flex flex-col items-center justify-center flex-1">
+                            <h2 class="text-xs font-bold text-slate-900 mb-1">Unresolved Scheduling Conflicts</h2>
+                            <p class="text-[11px] text-slate-500 max-w-md">Overlapping rooms found in schedule. Tweak rooms in the grid or click block rules to initiate resolutions.</p>
+                        </div>
+                    `;
+                } else {
+                    suggestionsContent = `
+                        <div class="p-6 text-center flex flex-col items-center justify-center flex-1">
+                            <h2 class="text-xs font-bold text-slate-900 mb-1">Schedule is Conflict-Free!</h2>
+                            <p class="text-[11px] text-slate-500 max-w-md">No overlapping rooms found. Turn on the Super Optimizer to reduce teacher transitions.</p>
+                        </div>
+                    `;
+                }
+            } else {
+                const rowsHTML = state.suggestions.map((s, idx) => {
+                    let badgeClass = "bg-slate-100 text-slate-700 border-slate-200";
+                    if(s.type === 'Room Conflict') badgeClass = "bg-red-100 text-red-700 border-red-200";
+                    if(s.type === 'Period Move') badgeClass = "bg-amber-100 text-amber-800 border-amber-200";
+                    if(s.type === 'Optimization') badgeClass = "bg-emerald-100 text-emerald-700 border-emerald-200";
+                    if(s.type === 'Super Optimization') badgeClass = "bg-indigo-100 text-indigo-800 border-indigo-200";
+                    if(s.type === 'Room Swap') badgeClass = "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200";
+
+                    let actionEditHTML = '';
+                    if (s.actionData) {
+                        const periodSelect = `<select id="edit-act-period-${idx}" class="bg-white border border-slate-200 rounded px-1 py-0.5 text-[10px] outline-none">
+                            ${state.periods.map(p => `<option value="${p}" ${p === s.actionData.newPeriod ? 'selected' : ''}>P${p}</option>`).join('')}
+                        </select>`;
+
+                        const roomSelect = `<select id="edit-act-room-${idx}" class="bg-white border border-slate-200 rounded px-1 py-0.5 text-[10px] outline-none">
+                            <option value="">TBD</option>
+                            ${state.rooms.map(r => `<option value="${r}" ${r === s.actionData.newRoom ? 'selected' : ''}>Room ${r}</option>`).join('')}
+                        </select>`;
+
+                        actionEditHTML = `
+                            <div class="flex items-center gap-1 justify-end">
+                                ${periodSelect}
+                                ${roomSelect}
+                                <button class="apply-fix-btn bg-blue-600 hover:bg-blue-700 text-white px-2 py-0.5 rounded text-[10px] font-bold transition-colors shadow-sm" data-idx="${idx}" data-classid="${s.actionData.id}">
+                                    Fix
+                                </button>
+                            </div>
+                        `;
+                    }
+
+                    return `
+                    <tr class="hover:bg-slate-50 transition-colors border-b border-slate-100 text-[11px]">
+                        <td class="px-4 py-2">
+                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border ${badgeClass}">
+                                ${s.type}
+                            </span>
+                        </td>
+                        <td class="px-4 py-2 font-semibold text-slate-900">${s.period}</td>
+                        <td class="px-4 py-2 text-slate-800">${s.teacher}</td>
+                        <td class="px-4 py-2 text-slate-500 text-[10px] max-w-[120px] truncate" title="${s.course}">${s.course}</td>
+                        <td class="px-4 py-2 font-medium text-slate-700">${s.roomChange}</td>
+                        <td class="px-4 py-2 text-slate-400 text-[10px] whitespace-normal max-w-[200px] leading-tight">${s.reason}</td>
+                        <td class="px-4 py-2 text-right">${actionEditHTML}</td>
+                    </tr>
+                `}).join('');
+
+                suggestionsContent = `
+                    <div class="px-4 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider shrink-0">
+                        Optimization Action Plan
+                    </div>
+                    <div class="table-container overflow-x-auto border-t border-slate-200 flex-1 overflow-y-auto min-h-0">
+                        <table class="w-full text-left text-[11px] text-slate-600 whitespace-nowrap">
+                            <thead class="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-4 py-1.5">Type</th>
+                                    <th class="px-4 py-1.5">Period</th>
+                                    <th class="px-4 py-1.5">Teacher</th>
+                                    <th class="px-4 py-1.5">Course</th>
+                                    <th class="px-4 py-1.5">Room Target</th>
+                                    <th class="px-4 py-1.5">Logic Reasoning</th>
+                                    <th class="px-4 py-1.5 text-right">Apply Custom Fix</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 bg-white">
+                                ${rowsHTML}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="bg-slate-50/20 flex flex-col h-full min-h-0 flex-grow">
+                    ${metricsTableHTML}
+                    ${suggestionsContent}
+                </div>
+            `;
+        }
+
+        function getChangeLogViewHTML() {
+            let logRowsHTML = state.changeLog.map(log => `
+                <tr class="hover:bg-slate-50 border-b border-slate-100 transition-colors text-xs">
+                    <td class="px-4 py-2 text-slate-400 font-mono text-[10px]">${log.timestamp}</td>
+                    <td class="px-4 py-2">
+                        <span class="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-blue-200">
+                            ${log.actionType}
+                        </span>
+                    </td>
+                    <td class="px-4 py-2 text-slate-700 font-medium whitespace-normal break-words">${log.details}</td>
+                </tr>
+            `).join('');
+
+            return `
+                <div class="bg-slate-50/20 flex flex-col h-full min-h-0 flex-grow p-3">
+                    <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-2 shrink-0">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-sm">Action History Audit Trail</h3>
+                            <p class="text-[11px] text-slate-500">Chronological history of changes for local schedule documentation.</p>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <button id="copy-log-btn" onclick="copyChangeLog()" class="bg-slate-800 hover:bg-slate-700 text-white px-2.5 py-1 rounded text-xs font-semibold shadow-sm transition-colors flex items-center gap-1">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                Copy Log to Clipboard
+                            </button>
+                            <button onclick="clearChangeLog()" class="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-2.5 py-1 rounded text-xs font-semibold shadow-sm transition-colors flex items-center gap-1">
+                                Clear Log
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="table-container overflow-x-auto border border-slate-200 rounded-lg bg-white flex-1 overflow-y-auto min-h-0">
+                        <table class="w-full text-left text-xs text-slate-600 border-collapse">
+                            <thead class="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                    <th class="px-4 py-1.5 w-24">Timestamp</th>
+                                    <th class="px-4 py-1.5 w-32">Action Type</th>
+                                    <th class="px-4 py-1.5">Action Details</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${logRowsHTML || `<tr><td colSpan="3" class="px-4 py-12 text-center text-slate-400 italic text-xs">No entries in the change log. Move components in the grids to generate events.</td></tr>`}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function copyChangeLog() {
+            const formattedLogText = state.changeLog.map(entry => `[${entry.timestamp}] ${entry.actionType}: ${entry.details}`).join('\n');
+            
+            const tempTextArea = document.createElement('textarea');
+            tempTextArea.value = formattedLogText;
+            tempTextArea.style.position = 'fixed'; 
+            document.body.appendChild(tempTextArea);
+            tempTextArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempTextArea);
+
+            const copyBtn = document.getElementById('copy-log-btn');
+            if (copyBtn) {
+                const originalText = copyBtn.innerHTML;
+                copyBtn.innerHTML = `<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!`;
+                copyBtn.classList.add('bg-emerald-600');
+                copyBtn.classList.remove('bg-slate-800');
+                setTimeout(() => {
+                    copyBtn.innerHTML = originalText;
+                    copyBtn.classList.remove('bg-emerald-600');
+                    copyBtn.classList.add('bg-slate-800');
+                }, 1500);
+            }
+        }
+
+        function clearChangeLog() {
+            state.changeLog = [];
+            logAction("Log Cleared", "Cleared history trail database log.");
+            render();
+        }
+
+        function render() {
+            const root = document.getElementById('app-root');
+            if (!state.dataLoaded) {
+                root.innerHTML = getEmptyStateHTML();
+            } else {
+                root.innerHTML = `
+                    ${getHeaderHTML()}
+                    ${getViewsHTML()}
+                `;
+            }
+        }
+
+        function getEmptyStateHTML() {
+            return `
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                    <div>
+                        <h1 class="text-2xl font-bold text-slate-900 flex items-center gap-2">
+                            <svg class="text-blue-600 w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                            Science Dept. Schedule Analyzer
+                        </h1>
+                    </div>
+                </div>
+                ${state.errorMsg ? `<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg font-medium">${state.errorMsg}</div>` : ''}
+                <div class="bg-white p-12 rounded-xl shadow-sm border border-slate-200 text-center flex flex-col items-center justify-center flex-1 min-h-[400px]">
+                    <div class="bg-blue-50 p-5 rounded-full text-blue-500 mb-4">
+                        <svg class="w-12 h-12" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    </div>
+                    <h2 class="text-xl font-bold text-slate-900 mb-2">Upload your schedule to begin</h2>
+                    <p class="text-slate-500 max-w-md mb-6">Select the Science Dept CSV file (e.g., <strong>Science + CTE Schedule - copy - CS_PLTW (5).csv</strong>). The analyzer dynamically adjusts row layouts to fit your viewport screen.</p>
+                    <label class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg cursor-pointer transition-colors shadow-sm font-medium flex items-center gap-2">
+                        <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        Upload CSV Schedule
+                        <input type="file" accept=".csv" class="hidden file-upload-input" />
+                    </label>
+                    <label class="mt-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-6 py-2.5 rounded-lg cursor-pointer transition-colors shadow-sm font-medium flex items-center gap-2">
+                        Open Saved Project
+                        <input type="file" accept=".json,.schedule.json,application/json" class="hidden project-upload-input" />
+                    </label>
+                </div>
+            `;
+        }
+
+        document.addEventListener('change', (e) => {
+            if (e.target.classList.contains('file-upload-input')) {
+                handleUpload(e);
+            }
+            if (e.target.classList.contains('project-upload-input')) {
+                handleProjectUpload(e);
+            }
+            if (e.target.classList.contains('room-selector')) {
+                const classId = parseInt(e.target.dataset.id);
+                const newRoom = e.target.value;
+                const cls = state.proposed.find(c => c.id === classId);
+                if (cls) {
+                    const originalRoom = cls.Room || "TBD";
+                    cls.Room = newRoom;
+                    logAction("Room Change", `Changed ${cls.Teacher}'s ${cls.Course} (Period ${cls.Period}) room allocation from ${originalRoom} to ${newRoom || "TBD"}.`);
+                    updateConflicts(state.proposed);
+                    updateMetrics();
+                    generateSuggestions(); 
+                    render(); 
+                }
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            const fixBtn = e.target.closest('.apply-fix-btn');
+            if (fixBtn) {
+                const idx = parseInt(fixBtn.dataset.idx);
+                const classId = parseInt(fixBtn.dataset.classid);
+                const customPeriod = document.getElementById(`edit-act-period-${idx}`).value;
+                const customRoom = document.getElementById(`edit-act-room-${idx}`).value;
+
+                const cls = state.proposed.find(c => c.id === classId);
+                if (cls) {
+                    const oldPeriod = cls.Period;
+                    const oldRoom = cls.Room || "TBD";
+                    cls.Period = customPeriod;
+                    cls.Room = customRoom;
+                    logAction("Manual Adjustment", `Manually reassigned ${cls.Teacher}'s ${cls.Course} from Period ${oldPeriod} (Room ${oldRoom}) to Period ${customPeriod} (Room ${customRoom || 'TBD'}).`);
+                }
+                
+                updateConflicts(state.proposed);
+                updateMetrics();
+                generateSuggestions(); 
+                render();
+                return;
+            }
+
+            const viewBtn = e.target.closest('.view-btn');
+            if (viewBtn) {
+                setView(viewBtn.dataset.view);
+                return;
+            }
+
+            const listTabBtn = e.target.closest('.list-tab-btn');
+            if (listTabBtn) {
+                setListTab(listTabBtn.dataset.listTab);
+                return;
+            }
+
+            const sortHeader = e.target.closest('.sort-header');
+            if (sortHeader) {
+                handleSort(sortHeader.dataset.sort);
+                return;
+            }
+
+            const teacherBtn = e.target.closest('.teacher-sel-btn');
+            if (teacherBtn) {
+                selectTeacherForPrefs(teacherBtn.dataset.teacher);
+                return;
+            }
+
+            const saveBtn = e.target.closest('#save-prefs-btn');
+            if (saveBtn) {
+                savePreferences();
+                return;
+            }
+
+            const superOptBtn = e.target.closest('#super-optimize-btn');
+            if (superOptBtn) {
+                state.useSuperOptimizer = !state.useSuperOptimizer;
+                logAction("Optimizer Config", `Transition optimizer super-optimization rule marked as ${state.useSuperOptimizer ? "Enabled" : "Disabled"}.`);
+                generateSuggestions();
+                render();
+                return;
+            }
+
+            const randomOptBtn = e.target.closest('#random-optimize-btn');
+            if (randomOptBtn) {
+                runRandomOptimizer();
+                return;
+            }
+
+            const resetBtn = e.target.closest('#reset-schedule-btn');
+            if (resetBtn) {
+                state.useSuperOptimizer = false;
+                state.proposed = JSON.parse(JSON.stringify(state.flattened)); 
+                updateConflicts(state.proposed);
+                state.suggestions = [];
+                state.view = 'teacher';
+                logAction("Schedule Reverted", "Discarded current proposal layout; schedule reset back to baseline uploaded CSV settings.");
+                updateMetrics();
+                generateSuggestions();
+                render();
+                return;
+            }
+        });
+
+        document.addEventListener('dragstart', (e) => {
+            if(e.target.tagName.toLowerCase() === 'select') {
+                e.preventDefault();
+                return;
+            }
+            const draggie = e.target.closest('.draggable-class');
+            if (draggie) {
+                state.draggedClassId = parseInt(draggie.dataset.id);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData('text/plain', draggie.dataset.id);
+            }
+        });
+
+        document.addEventListener('dragover', (e) => {
+            const dropzone = e.target.closest('.dropzone-td');
+            if (dropzone) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                dropzone.classList.add('drag-over');
+            }
+        });
+
+        document.addEventListener('dragleave', (e) => {
+            const dropzone = e.target.closest('.dropzone-td');
+            if (dropzone) {
+                dropzone.classList.remove('drag-over');
+            }
+        });
+
+        document.addEventListener('drop', (e) => {
+            const dropzone = e.target.closest('.dropzone-td');
+            if (dropzone) {
+                e.preventDefault();
+                dropzone.classList.remove('drag-over');
+                if (!state.draggedClassId) return;
+
+                const targetGrid = dropzone.dataset.grid;
+                const targetPeriod = dropzone.dataset.period;
+                const cls = state.proposed.find(c => c.id === state.draggedClassId);
+                
+                if (cls) {
+                    const originalPeriod = cls.Period;
+                    if (targetGrid === 'teacher') {
+                        const originalTeacher = cls.Teacher;
+                        cls.Period = targetPeriod;
+                        cls.Teacher = dropzone.dataset.teacher;
+                        logAction("Class Moved", `Dragged ${cls.Course} from ${originalTeacher} (Period ${originalPeriod}) to ${cls.Teacher} (Period ${cls.Period}).`);
+                    } else if (targetGrid === 'room') {
+                        const originalRoom = cls.Room || "TBD";
+                        cls.Period = targetPeriod;
+                        cls.Room = dropzone.dataset.room;
+                        logAction("Class Moved", `Dragged ${cls.Teacher}'s ${cls.Course} from Period ${originalPeriod} (Room ${originalRoom}) to Period ${cls.Period} (Room ${cls.Room}).`);
+                    }
+                    updateConflicts(state.proposed);
+                    updateMetrics();
+                    generateSuggestions(); 
+                    render();
+                }
+                state.draggedClassId = null;
+            }
+        });
+
+        restoreCourseTeamData();
+        window.onload = render;
+    </script>
+</body>
+</html>
